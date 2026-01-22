@@ -1,5 +1,5 @@
 #!/bin/bash
-# IntegratedWritingGrader ビルドスクリプト
+# IntegratedWritingGrader ビルドスクリプト (py2app版)
 
 set -e
 
@@ -18,7 +18,7 @@ fi
 # 依存関係確認
 echo ""
 echo "Checking dependencies..."
-pip install -q pyinstaller PyQt6 PyMuPDF
+pip install -q py2app PyQt6 PyMuPDF
 
 # アイコンがなければ生成
 if [ ! -f "resources/AppIcon.icns" ]; then
@@ -33,10 +33,15 @@ echo ""
 echo "Cleaning previous build..."
 rm -rf build dist
 
-# PyInstallerでビルド
+# py2appでビルド
 echo ""
-echo "Building application..."
-pyinstaller IntegratedWritingGrader.spec --noconfirm
+echo "Building application with py2app..."
+python setup.py py2app
+
+# quarantine属性を削除
+echo ""
+echo "Removing quarantine attributes..."
+xattr -cr dist/IntegratedWritingGrader.app
 
 # 完了
 echo ""
@@ -45,6 +50,7 @@ echo "  Build Complete!"
 echo "=========================================="
 echo ""
 echo "App location: dist/IntegratedWritingGrader.app"
+echo "App size: $(du -sh dist/IntegratedWritingGrader.app | cut -f1)"
 echo ""
 echo "To install:"
 echo "  cp -r dist/IntegratedWritingGrader.app /Applications/"
