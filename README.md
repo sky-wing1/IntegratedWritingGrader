@@ -9,15 +9,24 @@
 - **手動編集**: AI採点結果の確認・修正
 - **動的採点基準**: 週ごとに異なる採点基準を自動で読み込み
 - **PDF出力**: 採点結果を元のPDFに注釈として追加
+- **添削用紙生成**: LaTeXテンプレートから個別化された添削用紙を生成
 - **データ保存**: 学期・週ごとに採点結果をJSON形式で保存
 
 ## 必要環境
 
 - Python 3.9+
-- macOS (DyNAMiKS連携はmacOSのみ)
+- macOS
 - Claude Code CLI (`claude` コマンド)
 
+### オプション
+
+- TeX環境 (uplatex, dvipdfmx) - 添削用紙生成用
+- DyNAMiKS.app - 連携機能用
+- scancrop - PDF自動クロップ用
+
 ## インストール
+
+### 開発環境
 
 ```bash
 # リポジトリをクローン
@@ -32,12 +41,30 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 使い方
+### ビルド済みアプリ
 
 ```bash
-# アプリを起動
+./build.sh
+cp -r dist/IntegratedWritingGrader.app /Applications/
+```
+
+## 使い方
+
+### 起動方法
+
+**開発モード:**
+```bash
+# ダブルクリックで起動
+英作文採点.command
+
+# または
 source .venv/bin/activate
 python -m app.main
+```
+
+**ビルド済みアプリ:**
+```bash
+open /Applications/IntegratedWritingGrader.app
 ```
 
 ### 基本的な流れ
@@ -62,10 +89,18 @@ python -m app.main
     └── ...
 ```
 
+## ドキュメント
+
+- [Contributing Guide](docs/CONTRIB.md) - 開発環境セットアップ、コード規約
+- [Runbook](docs/RUNBOOK.md) - デプロイ、トラブルシューティング
+
 ## 依存関係
 
-- PyQt6 - GUI
-- PyMuPDF (fitz) - PDF処理
+| Package | Purpose |
+|---------|---------|
+| PyQt6 | GUI |
+| PyMuPDF | PDF処理 |
+| py2app | macOSアプリ化 |
 
 ## ライセンス
 

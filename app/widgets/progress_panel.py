@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QProgressBar, QPushButton, QComboBox, QFileDialog
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 
 class ProgressPanel(QWidget):
@@ -15,6 +15,7 @@ class ProgressPanel(QWidget):
     grading_stopped = pyqtSignal()
     json_imported = pyqtSignal(str)  # JSONファイルパス
     save_requested = pyqtSignal()  # 保存リクエスト
+    load_saved_requested = pyqtSignal()  # 保存済み結果読み込みリクエスト
 
     def __init__(self):
         super().__init__()
@@ -43,7 +44,8 @@ class ProgressPanel(QWidget):
         self.method_combo = QComboBox()
         self.method_combo.addItems([
             "Claude Code CLI",
-            "結果JSONインポート"
+            "結果JSONインポート",
+            "保存済み結果を読み込み"
         ])
         self.method_combo.setFixedWidth(180)
         self.method_combo.currentIndexChanged.connect(self._on_method_changed)
@@ -139,9 +141,12 @@ class ProgressPanel(QWidget):
         if index == 0:  # CLI
             self.action_btn.setText("採点開始")
             self.detail_label.setText("Claude Code CLIで採点します")
-        else:  # JSONインポート
+        elif index == 1:  # JSONインポート
             self.action_btn.setText("JSONを選択")
             self.detail_label.setText("採点結果のJSONファイルを選択してください")
+        else:  # 保存済み結果
+            self.action_btn.setText("結果を選択")
+            self.detail_label.setText("保存済みの採点結果を読み込みます")
 
     def _on_action_clicked(self):
         """アクションボタンクリック"""
@@ -149,6 +154,8 @@ class ProgressPanel(QWidget):
 
         if method_index == 1:  # JSONインポート
             self._import_json()
+        elif method_index == 2:  # 保存済み結果
+            self.load_saved_requested.emit()
         else:  # CLI
             if self._is_running:
                 self.stop_grading()
@@ -249,3 +256,39 @@ class ProgressPanel(QWidget):
         self.status_label.setText("保存済み")
         self.status_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #0f7b0f;")
         self.detail_label.setText(f"保存先: {path}")
+
+        # 保存ボタンを一時的に「保存しました」に変更
+        self.save_btn.setText("保存しました")
+        self.save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0f7b0f;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+        """)
+
+        # 2秒後に元に戻す
+        QTimer.singleShot(2000, self._reset_save_btn)
+
+    def _reset_save_btn(self):
+        """保存ボタンを元に戻す"""
+        self.save_btn.setText("結果を保存")
+        self.save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0f7b0f;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0d6b0d;
+            }
+            QPushButton:disabled {
+                background-color: #ccc;
+            }
+        """)

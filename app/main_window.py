@@ -5,7 +5,8 @@ import subprocess
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QStackedWidget, QListWidget, QListWidgetItem,
-    QLabel, QStatusBar, QMessageBox, QFileDialog
+    QLabel, QStatusBar, QMessageBox, QFileDialog,
+    QDialog, QDialogButtonBox
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QAction
@@ -155,6 +156,7 @@ class MainWindow(QMainWindow):
         self.integrated_panel.progress_panel.grading_stopped.connect(self._on_grading_stopped)
         self.integrated_panel.progress_panel.json_imported.connect(self._on_json_imported)
         self.integrated_panel.progress_panel.save_requested.connect(self._on_save_requested)
+        self.integrated_panel.progress_panel.load_saved_requested.connect(self._on_load_saved_requested)
         self.content_stack.addWidget(self.integrated_panel)
 
         # 出力ページ
@@ -416,22 +418,117 @@ class MainWindow(QMainWindow):
         """採点結果の保存リクエスト"""
         results = self.integrated_panel.get_results()
         if not results:
-            QMessageBox.warning(self, "保存", "保存する採点結果がありません")
+            self.statusbar.showMessage("保存する採点結果がありません")
             return
 
         current = Config.get_current_week()
         if not current:
-            QMessageBox.warning(self, "保存", "週が選択されていません")
+            self.statusbar.showMessage("週が選択されていません")
             return
 
         try:
             saved_path = Config.save_results(results)
             self.integrated_panel.progress_panel.set_saved(str(saved_path))
             self.statusbar.showMessage(f"保存完了: {saved_path}")
-            QMessageBox.information(
-                self,
-                "保存完了",
-                f"採点結果を保存しました:\n{saved_path}"
-            )
         except Exception as e:
-            QMessageBox.critical(self, "保存エラー", f"保存に失敗しました:\n{e}")
+            self.statusbar.showMessage(f"保存エラー: {e}")
+
+    def _on_load_saved_requested(self):
+        """保存済み結果の読み込みリクエスト"""
+        saved_weeks = Config.list_saved_weeks()
+        if not saved_weeks:
+            self.statusbar.showMessage("保存済みの採点結果がありません")
+            return
+
+        # 選択ダイアログを表示
+        dialog = QDialog(self)
+        dialog.setWindowTitle("保存済み結果を読み込み")
+        dialog.setMinimumWidth(400)
+
+        layout = QVBoxLayout(dialog)
+
+        label = QLabel("読み込む採点結果を選択してください:")
+        layout.addWidget(label)
+
+        list_widget = QListWidget()
+        list_widget.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            QListWidget::item:selected {
+                background-color: #e8f4fc;
+                color: #37352f;
+            }
+        """)
+
+        for saved in saved_weeks:
+            year = saved.get("year") or "----"
+            term = saved.get("term") or ""
+            week = saved.get("week") or 0
+            class_name = saved.get("class_name") or ""
+
+            if class_name:
+                text = f"{year}年度 高2英語{class_name} {term} 第{week}週"
+            else:
+                text = f"{year}年度 {term} 第{week}週"
+
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, saved)
+            list_widget.addItem(item)
+
+        list_widget.setCurrentRow(0)
+        layout.addWidget(list_widget)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            selected_item = list_widget.currentItem()
+            if selected_item:
+                saved = selected_item.data(Qt.ItemDataRole.UserRole)
+                self._load_saved_results_from_week(saved)
+
+    def _load_saved_results_from_week(self, saved: dict):
+        """指定された週の保存済み結果を読み込み"""
+        year = saved.get("year")
+        term = saved.get("term")
+        week = saved.get("week")
+        class_name = saved.get("class_name")
+
+        # 現在の週を設定
+        Config.set_current_week(year, term, week, class_name)
+
+        # 採点基準を読み込み
+        self._load_criteria()
+
+        # 採点結果を読み込み
+        results = Config.load_results(year, term, week, class_name)
+        if results:
+            self.integrated_panel.set_results(results)
+            self.integrated_panel.set_criteria(self._current_criteria)
+            self.integrated_panel.progress_panel.set_complete()
+            self.integrated_panel.progress_panel.save_btn.setEnabled(True)
+
+            # 出力パネルにもデータをセット
+            if self._current_pdf_path:
+                self.export_panel.set_data(self._current_pdf_path, results)
+
+            if class_name:
+                self.statusbar.showMessage(
+                    f"読み込み完了: {year}年度 高2英語{class_name} {term} 第{week}週 ({len(results)}件)"
+                )
+            else:
+                self.statusbar.showMessage(
+                    f"読み込み完了: {year}年度 {term} 第{week}週 ({len(results)}件)"
+                )
+        else:
+            self.statusbar.showMessage("採点結果の読み込みに失敗しました")

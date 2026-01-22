@@ -3,10 +3,10 @@
 from __future__ import annotations
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QTextEdit, QSpinBox, QGroupBox, QPushButton, QScrollArea,
+    QTextEdit, QSpinBox, QGroupBox, QScrollArea,
     QComboBox, QGridLayout
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
 from app.utils.criteria_parser import GradingCriteria, Criterion, _default_criteria
 
@@ -21,6 +21,13 @@ class FeedbackEditorWidget(QWidget):
         self._current_data: dict = {}
         self._criteria: GradingCriteria = _default_criteria()
         self._criterion_combos: list[QComboBox] = []
+
+        # デバウンス用タイマー（テキスト入力中の頻繁な更新を防ぐ）
+        self._debounce_timer = QTimer()
+        self._debounce_timer.setSingleShot(True)
+        self._debounce_timer.setInterval(500)  # 500ms
+        self._debounce_timer.timeout.connect(self._emit_data_changed)
+
         self._setup_ui()
 
     def _setup_ui(self):
@@ -98,25 +105,13 @@ class FeedbackEditorWidget(QWidget):
         revision_layout.addWidget(self.revision_points)
         self._content_layout.addWidget(revision_group)
 
-        # 保存ボタン
-        self.save_btn = QPushButton("変更を保存")
-        self.save_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0f7b0f;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 12px 24px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #0d6b0d;
-            }
-        """)
-        self.save_btn.clicked.connect(self._save_data)
-        self._content_layout.addWidget(self.save_btn, alignment=Qt.AlignmentFlag.AlignRight)
-
         self._content_layout.addStretch()
+
+        # テキストフィールドの変更を自動反映（デバウンス付き）
+        self.corrected_text.textChanged.connect(self._on_text_changed)
+        self.content_comment.textChanged.connect(self._on_text_changed)
+        self.expression_comment.textChanged.connect(self._on_text_changed)
+        self.revision_points.textChanged.connect(self._on_text_changed)
 
         scroll.setWidget(content)
 
@@ -327,10 +322,16 @@ class FeedbackEditorWidget(QWidget):
         self.content_score_spin.blockSignals(False)
 
         self._update_total()
+        self._emit_data_changed()  # 自動反映
 
     def _on_score_changed(self):
         """スコア変更時"""
         self._update_total()
+        self._emit_data_changed()  # 自動反映
+
+    def _on_text_changed(self):
+        """テキスト変更時（デバウンス付き）"""
+        self._debounce_timer.start()  # タイマーをリスタート
 
     def _update_total(self):
         """合計点更新"""
@@ -349,8 +350,8 @@ class FeedbackEditorWidget(QWidget):
             color = "#dc2626"
         self.total_label.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {color};")
 
-    def _save_data(self):
-        """保存"""
+    def _emit_data_changed(self):
+        """データ変更を通知（自動反映）"""
         data = self.get_data()
         self._current_data.update(data)
         self.data_changed.emit(data)

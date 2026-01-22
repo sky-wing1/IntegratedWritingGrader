@@ -1,12 +1,13 @@
 """週管理パネル"""
 
 from __future__ import annotations
+import re
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QGroupBox, QPushButton, QFileDialog, QComboBox,
+    QGroupBox, QPushButton, QComboBox,
     QSpinBox, QTextEdit, QMessageBox, QListWidget,
-    QListWidgetItem, QSplitter
+    QListWidgetItem, QSplitter, QLineEdit
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
@@ -86,17 +87,68 @@ class WeekManagerPanel(QWidget):
         self.week_info.setStyleSheet("font-size: 16px; font-weight: bold;")
         right_layout.addWidget(self.week_info)
 
-        # プロンプト編集
+        # 問題文（problem.tex）
+        problem_group = QGroupBox("問題文（problem.tex）")
+        problem_layout = QVBoxLayout(problem_group)
+
+        # 週タイトル
+        title_layout = QHBoxLayout()
+        title_layout.addWidget(QLabel("週タイトル:"))
+        self.week_title_edit = QLineEdit()
+        self.week_title_edit.setPlaceholderText("後期第14週")
+        title_layout.addWidget(self.week_title_edit, 1)
+        problem_layout.addLayout(title_layout)
+
+        # テーマ
+        theme_layout = QHBoxLayout()
+        theme_layout.addWidget(QLabel("テーマ:"))
+        self.theme_edit = QLineEdit()
+        self.theme_edit.setPlaceholderText("Violent Video Games")
+        theme_layout.addWidget(self.theme_edit, 1)
+        problem_layout.addLayout(theme_layout)
+
+        # 問題文
+        problem_layout.addWidget(QLabel("問題文:"))
+        self.problem_text_edit = QTextEdit()
+        self.problem_text_edit.setPlaceholderText("Do you agree or disagree with the following statement?...")
+        self.problem_text_edit.setMinimumHeight(80)
+        self.problem_text_edit.setMaximumHeight(120)
+        problem_layout.addWidget(self.problem_text_edit)
+
+        # 保存ボタン
+        problem_btn_layout = QHBoxLayout()
+        self.save_problem_btn = QPushButton("問題文を保存")
+        self.save_problem_btn.setEnabled(False)
+        self.save_problem_btn.clicked.connect(self._save_problem)
+        self.save_problem_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0f7b0f;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #0d6b0d; }
+            QPushButton:disabled { background-color: #ccc; }
+        """)
+        problem_btn_layout.addWidget(self.save_problem_btn)
+        problem_btn_layout.addStretch()
+        problem_layout.addLayout(problem_btn_layout)
+
+        right_layout.addWidget(problem_group)
+
+        # 採点基準（prompt.txt）
         prompt_group = QGroupBox("採点基準（prompt.txt）")
         prompt_layout = QVBoxLayout(prompt_group)
 
         self.prompt_edit = QTextEdit()
         self.prompt_edit.setPlaceholderText("採点基準を入力...")
-        self.prompt_edit.setMinimumHeight(200)
+        self.prompt_edit.setMinimumHeight(150)
         prompt_layout.addWidget(self.prompt_edit)
 
         prompt_btn_layout = QHBoxLayout()
-        self.save_prompt_btn = QPushButton("プロンプトを保存")
+        self.save_prompt_btn = QPushButton("採点基準を保存")
         self.save_prompt_btn.setEnabled(False)
         self.save_prompt_btn.clicked.connect(self._save_prompt)
         self.save_prompt_btn.setStyleSheet("""
@@ -116,30 +168,6 @@ class WeekManagerPanel(QWidget):
         prompt_layout.addLayout(prompt_btn_layout)
 
         right_layout.addWidget(prompt_group)
-
-        # 問題PDF
-        pdf_group = QGroupBox("問題PDF")
-        pdf_layout = QVBoxLayout(pdf_group)
-
-        self.pdf_status = QLabel("PDFが登録されていません")
-        self.pdf_status.setStyleSheet("color: #9b9a97;")
-        pdf_layout.addWidget(self.pdf_status)
-
-        pdf_btn_layout = QHBoxLayout()
-        self.register_pdf_btn = QPushButton("PDFを登録")
-        self.register_pdf_btn.setEnabled(False)
-        self.register_pdf_btn.clicked.connect(self._register_pdf)
-        pdf_btn_layout.addWidget(self.register_pdf_btn)
-
-        self.open_pdf_btn = QPushButton("PDFを開く")
-        self.open_pdf_btn.setEnabled(False)
-        self.open_pdf_btn.clicked.connect(self._open_pdf)
-        pdf_btn_layout.addWidget(self.open_pdf_btn)
-
-        pdf_btn_layout.addStretch()
-        pdf_layout.addLayout(pdf_btn_layout)
-
-        right_layout.addWidget(pdf_group)
         right_layout.addStretch()
 
         splitter.addWidget(right_widget)
@@ -169,14 +197,14 @@ class WeekManagerPanel(QWidget):
 
         # ソートして追加
         for week_num, week_dir in sorted(weeks):
-            # プロンプトとPDFの有無をチェック
+            # プロンプトと問題文の有無をチェック
             has_prompt = (week_dir / "prompt.txt").exists()
-            has_pdf = any(week_dir.glob("*.pdf"))
+            has_problem = (week_dir / "problem.tex").exists()
 
             status = ""
-            if has_prompt and has_pdf:
+            if has_prompt and has_problem:
                 status = " ✓"
-            elif has_prompt or has_pdf:
+            elif has_prompt or has_problem:
                 status = " △"
 
             item = QListWidgetItem(f"第{week_num:02d}週{status}")
@@ -209,40 +237,60 @@ class WeekManagerPanel(QWidget):
 
         self.week_info.setText(f"{term} 第{week_num:02d}週")
         self.save_prompt_btn.setEnabled(True)
-        self.register_pdf_btn.setEnabled(True)
+        self.save_problem_btn.setEnabled(True)
+
+        week_path = Config.get_week_path(term, week_num)
+
+        # problem.tex読み込み
+        problem_data = self._load_problem_tex(week_path)
+        self.week_title_edit.setText(problem_data["週タイトル"])
+        self.theme_edit.setText(problem_data["テーマ"])
+        self.problem_text_edit.setText(problem_data["問題文"])
 
         # プロンプト読み込み
-        week_path = Config.get_week_path(term, week_num)
         prompt_file = week_path / "prompt.txt"
-
         if prompt_file.exists():
             with open(prompt_file, "r", encoding="utf-8") as f:
                 self.prompt_edit.setText(f.read())
         else:
             self.prompt_edit.clear()
 
-        # PDF確認
-        pdfs = list(week_path.glob("*.pdf"))
-        if pdfs:
-            self.pdf_status.setText(f"登録済み: {pdfs[0].name}")
-            self.pdf_status.setStyleSheet("color: #0f7b0f; font-weight: bold;")
-            self.open_pdf_btn.setEnabled(True)
-        else:
-            self.pdf_status.setText("PDFが登録されていません")
-            self.pdf_status.setStyleSheet("color: #9b9a97;")
-            self.open_pdf_btn.setEnabled(False)
+    def _load_problem_tex(self, week_path: Path) -> dict:
+        """problem.texを読み込んで変数を抽出"""
+        problem_file = week_path / "problem.tex"
+
+        defaults = {
+            "週タイトル": f"{self._current_term}第{self._current_week:02d}週" if self._current_term and self._current_week else "",
+            "テーマ": "",
+            "問題文": ""
+        }
+
+        if not problem_file.exists():
+            return defaults
+
+        with open(problem_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        for key in defaults.keys():
+            # \def\キー{値} パターンを抽出（複数行対応）
+            pattern = rf'\\def\\{key}\{{((?:[^{{}}]|\{{[^{{}}]*\}})*)\}}'
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                defaults[key] = match.group(1)
+
+        return defaults
 
     def _clear_detail(self):
         """詳細をクリア"""
         self._current_term = None
         self._current_week = None
         self.week_info.setText("週を選択してください")
+        self.week_title_edit.clear()
+        self.theme_edit.clear()
+        self.problem_text_edit.clear()
         self.prompt_edit.clear()
-        self.pdf_status.setText("PDFが登録されていません")
-        self.pdf_status.setStyleSheet("color: #9b9a97;")
         self.save_prompt_btn.setEnabled(False)
-        self.register_pdf_btn.setEnabled(False)
-        self.open_pdf_btn.setEnabled(False)
+        self.save_problem_btn.setEnabled(False)
 
     def _add_week(self):
         """新しい週を追加"""
@@ -260,6 +308,16 @@ class WeekManagerPanel(QWidget):
 
         try:
             week_path.mkdir(parents=True, exist_ok=True)
+
+            # デフォルトのproblem.texを作成
+            problem_file = week_path / "problem.tex"
+            default_problem = f"""% {term}第{week_num:02d}週
+\\def\\週タイトル{{{term}第{week_num:02d}週}}
+\\def\\テーマ{{Writing Practice}}
+\\def\\問題文{{問題文を入力してください。}}
+"""
+            with open(problem_file, "w", encoding="utf-8") as f:
+                f.write(default_problem)
 
             # デフォルトのプロンプトを作成
             prompt_file = week_path / "prompt.txt"
@@ -288,6 +346,37 @@ class WeekManagerPanel(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "エラー", f"追加に失敗しました:\n{e}")
 
+    def _save_problem(self):
+        """problem.texを保存"""
+        if not self._current_term or not self._current_week:
+            return
+
+        week_path = Config.get_week_path(self._current_term, self._current_week)
+        problem_file = week_path / "problem.tex"
+
+        # 入力値を取得
+        week_title = self.week_title_edit.text() or f"{self._current_term}第{self._current_week:02d}週"
+        theme = self.theme_edit.text() or "Writing Practice"
+        problem_text = self.problem_text_edit.toPlainText()
+
+        content = f"""% {week_title} - {theme}
+\\def\\週タイトル{{{week_title}}}
+\\def\\テーマ{{{theme}}}
+\\def\\問題文{{{problem_text}}}
+"""
+
+        try:
+            with open(problem_file, "w", encoding="utf-8") as f:
+                f.write(content)
+
+            self._refresh_weeks()
+            self.week_updated.emit()
+
+            QMessageBox.information(self, "保存完了", "問題文を保存しました")
+
+        except Exception as e:
+            QMessageBox.critical(self, "エラー", f"保存に失敗しました:\n{e}")
+
     def _save_prompt(self):
         """プロンプトを保存"""
         if not self._current_term or not self._current_week:
@@ -303,59 +392,7 @@ class WeekManagerPanel(QWidget):
             self._refresh_weeks()
             self.week_updated.emit()
 
-            QMessageBox.information(self, "保存完了", "プロンプトを保存しました")
+            QMessageBox.information(self, "保存完了", "採点基準を保存しました")
 
         except Exception as e:
             QMessageBox.critical(self, "エラー", f"保存に失敗しました:\n{e}")
-
-    def _register_pdf(self):
-        """PDFを登録"""
-        if not self._current_term or not self._current_week:
-            return
-
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "問題PDFを選択",
-            str(Path.home() / "Desktop"),
-            "PDF Files (*.pdf)"
-        )
-
-        if not file_path:
-            return
-
-        week_path = Config.get_week_path(self._current_term, self._current_week)
-
-        try:
-            import shutil
-            # 既存のPDFを削除
-            for old_pdf in week_path.glob("*.pdf"):
-                old_pdf.unlink()
-
-            # 新しいPDFをコピー
-            src = Path(file_path)
-            dst = week_path / src.name
-            shutil.copy(src, dst)
-
-            self.pdf_status.setText(f"登録済み: {src.name}")
-            self.pdf_status.setStyleSheet("color: #0f7b0f; font-weight: bold;")
-            self.open_pdf_btn.setEnabled(True)
-
-            self._refresh_weeks()
-            self.week_updated.emit()
-
-            QMessageBox.information(self, "登録完了", "PDFを登録しました")
-
-        except Exception as e:
-            QMessageBox.critical(self, "エラー", f"登録に失敗しました:\n{e}")
-
-    def _open_pdf(self):
-        """PDFを開く"""
-        if not self._current_term or not self._current_week:
-            return
-
-        week_path = Config.get_week_path(self._current_term, self._current_week)
-        pdfs = list(week_path.glob("*.pdf"))
-
-        if pdfs:
-            import subprocess
-            subprocess.run(["open", str(pdfs[0])], check=False)

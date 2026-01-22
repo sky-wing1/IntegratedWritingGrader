@@ -51,6 +51,10 @@ class LatexCompileWorker(QThread):
             meibo_path = self.template_dir / "名簿.tex"
             generate_meibo_tex(self.roster, meibo_path)
 
+            # Step 1.5: problem.tex を準備（なければダミーを生成）
+            self.progress.emit("問題ファイルを準備中...")
+            self._prepare_problem_tex()
+
             # Step 2: ベーステンプレートの学期・週を更新
             self.progress.emit("テンプレートを準備中...")
             base_tex = self.template_dir / "高２Integrated Writing 添削用紙.tex"
@@ -76,6 +80,16 @@ class LatexCompileWorker(QThread):
                 content = re.sub(
                     r'\\def\\週番号\{[^}]*\}',
                     r'\\def\\週番号{' + f'{self.week:02d}' + r'}',
+                    content
+                )
+
+                # 週別問題のパスを正しいパス（絶対パス）に書き換え
+                # 元: \input{../週別問題/\学期/第\週番号 週/problem.tex}
+                # 新: \input{/Users/.../weeks/後期/第14週/problem.tex}
+                problem_path = Config.WEEKS_PATH / self.term / f"第{self.week:02d}週" / "problem.tex"
+                content = re.sub(
+                    r'\\input\{[^}]*problem\.tex\}',
+                    r'\\input{' + str(problem_path).replace('\\', '/') + r'}',
                     content
                 )
 
@@ -153,6 +167,24 @@ class LatexCompileWorker(QThread):
 
         except Exception as e:
             self.error.emit(str(e))
+
+    def _prepare_problem_tex(self):
+        """問題ファイルを準備（なければダミーを生成）"""
+        # 週別問題のパス
+        week_dir = Config.WEEKS_PATH / self.term / f"第{self.week:02d}週"
+        problem_tex = week_dir / "problem.tex"
+
+        if not problem_tex.exists():
+            # ダミーのproblem.texを生成
+            week_dir.mkdir(parents=True, exist_ok=True)
+            dummy_content = r"""\def\週タイトル{第%d週}
+\def\テーマ{Writing Practice}
+\def\問題文{問題文がまだ設定されていません。週管理から設定してください。}
+\def\Wordscount{50-70 words}
+""" % self.week
+            with open(problem_tex, "w", encoding="utf-8") as f:
+                f.write(dummy_content)
+            logger.info("ダミーのproblem.texを生成: %s", problem_tex)
 
     def _compile_latex(self, tex_file: Path, work_dir: Path) -> Path | None:
         """LaTeXをコンパイル（uplatex + dvipdfmx）"""
@@ -360,11 +392,11 @@ class WorksheetPanel(QWidget):
         self.roster_status.setStyleSheet("color: #0f7b0f; font-weight: bold;")
         self.generate_btn.setEnabled(True)
 
-        # クラス名からクラスコードを自動抽出（例: "高2英語A" → "A"）
+        # クラス名からクラスコードを自動抽出（例: "高2英語A" → "A", "高2英語U4" → "U4"）
         class_name = roster.class_name
-        # 最後の1文字がアルファベットならそれをクラスコードとして使う
-        if class_name and class_name[-1].isalpha():
-            self.class_input.setText(class_name[-1])
+        if class_name and class_name.startswith("高2英語"):
+            # "高2英語" を削除してクラスコードを抽出
+            self.class_input.setText(class_name.replace("高2英語", ""))
         else:
             self.class_input.setText(class_name)
 
