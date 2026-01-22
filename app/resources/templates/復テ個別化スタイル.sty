@@ -1,0 +1,22 @@
+%!TEX root = 添削用紙個別化.tex
+\usepackage{tetsuchem}
+
+\define@cmdkeys{生徒パラメータ}[]{出席番号,姓,名,せい,めい}
+
+\newcommand\個人出力[1]{%
+  \begingroup
+  \setkeys{生徒パラメータ}{#1}% 与えられたパラメータを各命令に格納
+  %<ここに一人分の出力内容を書く>
+  %<個人ごとに異なる部分は \姓, \名, ... といった命令を代入>
+  %<たとえば「拝啓 \姓 \名 様」のように>
+  \forEachPDFPage{\入力PDF}{%
+    \begin{tikzpicture}[x=1cm,y=1cm,remember picture,overlay]
+      \node at (current page.center) {\img|\the\currentPDFPage|{\入力PDF}};
+      \貼り込み処理
+    \end{tikzpicture}
+    \newpage% ⬅ 一人分が終わるごとに紙を改める
+  }%
+  \endgroup
+}
+
+

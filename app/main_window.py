@@ -10,9 +10,14 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QAction
 
-from app.widgets.week_selector import WeekSelectorWidget
+from app.widgets.pdf_loader_panel import PdfLoaderPanel
 from app.widgets.integrated_grading_panel import IntegratedGradingPanel
 from app.widgets.export_panel import ExportPanel
+from app.widgets.roster_panel import RosterPanel
+from app.widgets.worksheet_panel import WorksheetPanel
+from app.widgets.week_manager_panel import WeekManagerPanel
+from app.widgets.stamp_panel import StampPanel
+from app.widgets.batch_panel import BatchPanel
 from app.workers.pipeline_worker import PipelineWorker
 from app.workers.grading_worker import GradingWorker, load_results_from_json
 from app.utils.config import Config
@@ -36,6 +41,7 @@ class MainWindow(QMainWindow):
         self._grading_worker: GradingWorker | None = None
         self._current_pdf_path: str | None = None
         self._current_criteria: GradingCriteria = _default_criteria()
+        self._detected_info: dict = {}
 
         self._setup_ui()
         self._setup_menu()
@@ -107,9 +113,14 @@ class MainWindow(QMainWindow):
         self.nav_list.setIconSize(QSize(20, 20))
 
         nav_items = [
-            ("週選択", "週を選んでPDF読み込み"),
+            ("PDF読み込み", "QRコードから自動判定"),
             ("採点・編集", "AI採点の実行と編集"),
             ("出力", "PDF出力"),
+            ("一括処理", "複数PDFをまとめて処理"),
+            ("名簿管理", "クラス名簿の管理"),
+            ("添削用紙", "添削用紙の生成"),
+            ("週管理", "週の追加と編集"),
+            ("スタンプ", "評価スタンプの管理"),
         ]
 
         for name, tooltip in nav_items:
@@ -132,10 +143,10 @@ class MainWindow(QMainWindow):
 
     def _add_pages(self):
         """ページ追加"""
-        # 週選択ページ
-        self.week_selector = WeekSelectorWidget()
-        self.week_selector.pdf_loaded.connect(self._on_pdf_loaded)
-        self.content_stack.addWidget(self.week_selector)
+        # PDF読み込みページ（QRコードから自動判定）
+        self.pdf_loader = PdfLoaderPanel()
+        self.pdf_loader.pdf_loaded.connect(self._on_pdf_loaded_with_info)
+        self.content_stack.addWidget(self.pdf_loader)
 
         # 採点・編集ページ（統合パネル）
         self.integrated_panel = IntegratedGradingPanel()
@@ -150,6 +161,44 @@ class MainWindow(QMainWindow):
         self.export_panel = ExportPanel()
         self.export_panel.export_complete.connect(self._on_export_complete)
         self.content_stack.addWidget(self.export_panel)
+
+        # 一括処理ページ
+        self.batch_panel = BatchPanel()
+        self.batch_panel.batch_finished.connect(self._on_batch_finished)
+        self.content_stack.addWidget(self.batch_panel)
+
+        # 名簿管理ページ
+        self.roster_panel = RosterPanel()
+        self.roster_panel.roster_loaded.connect(self._on_roster_loaded)
+        self.content_stack.addWidget(self.roster_panel)
+
+        # 添削用紙生成ページ
+        self.worksheet_panel = WorksheetPanel()
+        self.content_stack.addWidget(self.worksheet_panel)
+
+        # 週管理ページ
+        self.week_manager_panel = WeekManagerPanel()
+        self.week_manager_panel.week_updated.connect(self._on_week_updated)
+        self.content_stack.addWidget(self.week_manager_panel)
+
+        # スタンプ管理ページ
+        self.stamp_panel = StampPanel()
+        self.content_stack.addWidget(self.stamp_panel)
+
+    def _on_roster_loaded(self, roster):
+        """名簿読み込み完了"""
+        self.worksheet_panel.set_roster(roster)
+        self.statusbar.showMessage(
+            f"名簿読み込み完了: {roster.year} {roster.class_name} ({len(roster.students)}名)"
+        )
+
+    def _on_week_updated(self):
+        """週が更新された"""
+        self.statusbar.showMessage("週を更新しました")
+
+    def _on_batch_finished(self, all_results: list):
+        """一括処理完了"""
+        self.statusbar.showMessage(f"一括処理完了: {len(all_results)} ファイル")
 
     def _setup_menu(self):
         """メニューバー設定"""
@@ -188,10 +237,19 @@ class MainWindow(QMainWindow):
         """ナビゲーション変更"""
         self.content_stack.setCurrentIndex(index)
 
-    def _on_pdf_loaded(self, pdf_path: str):
-        """PDF読み込み完了"""
+    def _on_pdf_loaded_with_info(self, pdf_path: str, detected_info: dict):
+        """PDF読み込み完了（QRコード情報付き）"""
         self._current_pdf_path = pdf_path
-        self.statusbar.showMessage(f"PDF読み込み完了: {pdf_path}")
+        self._detected_info = detected_info
+
+        # 検出された情報をステータスバーに表示
+        year = detected_info.get("year", "?")
+        term = detected_info.get("term", "?")
+        week = detected_info.get("week", "?")
+        class_name = detected_info.get("class_name", "?")
+        self.statusbar.showMessage(
+            f"PDF読み込み完了: {year}年度 高2英語{class_name} {term} 第{week}週"
+        )
 
         # 採点基準を読み込み
         self._load_criteria()
@@ -206,6 +264,10 @@ class MainWindow(QMainWindow):
 
         # 採点・編集ページに移動
         self.nav_list.setCurrentRow(1)
+
+    def _on_pdf_loaded(self, pdf_path: str):
+        """PDF読み込み完了（後方互換性用）"""
+        self._on_pdf_loaded_with_info(pdf_path, {})
 
     def _load_existing_results(self):
         """既存の採点結果を読み込み"""
@@ -243,7 +305,7 @@ class MainWindow(QMainWindow):
     def _on_open_pdf(self):
         """PDFを開く"""
         self.nav_list.setCurrentRow(0)
-        self.week_selector.open_pdf_dialog()
+        self.pdf_loader.open_pdf_dialog()
 
     def _on_export(self):
         """PDF出力"""

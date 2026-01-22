@@ -164,6 +164,10 @@ class WeekSelectorWidget(QWidget):
             self.week_spin.setValue(week)
             self._load_prompt()
 
+    def refresh_weeks(self):
+        """週リストをリフレッシュ"""
+        self._load_prompt()
+
     def _on_term_changed(self, term: str):
         """学期変更"""
         self._load_prompt()

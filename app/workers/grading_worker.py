@@ -30,7 +30,7 @@ class GradingWorker(QThread):
         self._criteria: GradingCriteria = _default_criteria()
 
     def run(self):
-        """採点実行"""
+        """採点実行（一括処理）"""
         try:
             # プロンプト読み込み
             current = Config.get_current_week()
@@ -60,15 +60,16 @@ class GradingWorker(QThread):
                 raise RuntimeError("クロップ済み画像が見つかりません。先にPDF処理を実行してください。")
 
             total = len(image_files)
+            self.progress.emit(0, total, f"{total}件の答案を一括採点中...")
 
-            for i, image_file in enumerate(image_files):
-                if self._is_cancelled:
-                    return
+            if self._is_cancelled:
+                return
 
-                self.progress.emit(i, total, f"ページ {i + 1}/{total} を採点中...")
+            # 一括採点
+            self._results = self._grade_batch_with_cli(base_prompt, image_files)
 
-                result = self._grade_with_cli(base_prompt, image_file, i + 1)
-                self._results.append(result)
+            # 結果を通知
+            for i, result in enumerate(self._results):
                 self.result_ready.emit(i + 1, result)
 
             self.progress.emit(total, total, "完了")
@@ -79,8 +80,79 @@ class GradingWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+    def _grade_batch_with_cli(self, prompt: str, image_files: list[Path]) -> list[dict]:
+        """Claude Code CLIで一括採点"""
+        # 動的なJSON形式を生成
+        json_schema = self._build_json_schema_for_batch()
+
+        # 画像リストを作成
+        image_list = "\n".join([f"- ページ{i+1}: {img}" for i, img in enumerate(image_files)])
+
+        # プロンプトに全画像パスを追加
+        full_prompt = f"""{prompt}
+
+以下の画像ファイル群の答案をすべて採点してください。
+
+{image_list}
+
+必ず以下のJSON配列形式で、全ページ分の結果を出力してください:
+```json
+[
+{json_schema}
+]
+```
+
+重要: 必ず全{len(image_files)}件分の結果を配列で返してください。"""
+
+        try:
+            # Claude Code CLI呼び出し
+            cmd = [
+                "claude",
+                "-p", full_prompt,
+                "--allowedTools", "Read",  # 画像読み込み許可
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600  # 10分タイムアウト
+            )
+
+            if result.returncode == 0:
+                return self._parse_batch_result(result.stdout, len(image_files))
+            else:
+                # エラー時は全ページ分のエラー結果を返す
+                return [
+                    {
+                        "page": i + 1,
+                        "error": f"CLI エラー: {result.stderr}",
+                        "total_score": None
+                    }
+                    for i in range(len(image_files))
+                ]
+
+        except subprocess.TimeoutExpired:
+            return [
+                {
+                    "page": i + 1,
+                    "error": "タイムアウト（10分）",
+                    "total_score": None
+                }
+                for i in range(len(image_files))
+            ]
+        except FileNotFoundError:
+            return [
+                {
+                    "page": i + 1,
+                    "error": "claude コマンドが見つかりません。Claude Code CLIをインストールしてください。",
+                    "total_score": None
+                }
+                for i in range(len(image_files))
+            ]
+
     def _grade_with_cli(self, prompt: str, image_file: Path, page_num: int) -> dict:
-        """Claude Code CLIで1ページ採点"""
+        """Claude Code CLIで1ページ採点（レガシー）"""
         # 動的なJSON形式を生成
         json_schema = self._build_json_schema()
 
@@ -209,7 +281,7 @@ class GradingWorker(QThread):
         self._is_cancelled = True
 
     def _build_json_schema(self) -> str:
-        """動的なJSON形式を構築"""
+        """動的なJSON形式を構築（単一）"""
         lines = ["{"]
 
         # 各基準項目
@@ -223,6 +295,7 @@ class GradingWorker(QThread):
         lines.append(f'  "content_score": <内容点合計 0-{self._criteria.content_total}>,')
         lines.append('  "expression_deduction": <表現減点 0以上>,')
         lines.append('  "total_score": <合計点（内容点-表現減点、0以上）>,')
+        lines.append('  "original_text": "<生徒が書いた元の答案をそのまま書き写す>",')
         lines.append('  "corrected_text": "<添削後の文章（修正箇所は【】で囲む）>",')
         lines.append('  "content_comment": "<内容についてのコメント>",')
         lines.append('  "expression_comment": "<表現についてのコメント>",')
@@ -230,6 +303,150 @@ class GradingWorker(QThread):
         lines.append("}")
 
         return "\n".join(lines)
+
+    def _build_json_schema_for_batch(self) -> str:
+        """動的なJSON形式を構築（バッチ用、1件分の例）"""
+        lines = ["  {"]
+        lines.append('    "page": <ページ番号>,')
+
+        # 各基準項目
+        for i, criterion in enumerate(self._criteria.criteria):
+            options_judgment = "/".join([o.judgment for o in criterion.options])
+            options_score = "/".join([str(o.score) for o in criterion.options])
+            lines.append(f'    "criterion{i+1}_judgment": "<{criterion.number}{criterion.name}の判定: {options_judgment}>",')
+            lines.append(f'    "criterion{i+1}_score": <{criterion.number}{criterion.name}の点数: {options_score}>,')
+
+        # 共通フィールド
+        lines.append(f'    "content_score": <内容点合計 0-{self._criteria.content_total}>,')
+        lines.append('    "expression_deduction": <表現減点 0以上>,')
+        lines.append('    "total_score": <合計点（内容点-表現減点、0以上）>,')
+        lines.append('    "original_text": "<生徒が書いた元の答案をそのまま書き写す>",')
+        lines.append('    "corrected_text": "<添削後の文章（修正箇所は【】で囲む）>",')
+        lines.append('    "content_comment": "<内容についてのコメント>",')
+        lines.append('    "expression_comment": "<表現についてのコメント>",')
+        lines.append('    "revision_points": "<書き直しで意識すべきポイント>"')
+        lines.append("  },")
+        lines.append("  // ... 全ページ分続く")
+
+        return "\n".join(lines)
+
+    def _parse_batch_result(self, text: str, total_pages: int) -> list[dict]:
+        """一括採点結果をパース"""
+        results = []
+
+        # デフォルト結果を準備
+        for i in range(total_pages):
+            results.append(self._create_empty_result(i + 1))
+
+        try:
+            # ```json ... ``` を探す
+            if "```json" in text:
+                json_start = text.find("```json") + 7
+                json_end = text.find("```", json_start)
+                json_text = text[json_start:json_end].strip()
+            elif "[" in text:
+                # 最初の[から最後の]まで
+                json_start = text.find("[")
+                json_end = text.rfind("]") + 1
+                json_text = text[json_start:json_end]
+            else:
+                return results
+
+            data = json.loads(json_text)
+
+            if isinstance(data, list):
+                for item in data:
+                    page_num = item.get("page", 0)
+                    if 1 <= page_num <= total_pages:
+                        results[page_num - 1] = self._parse_single_item(item, page_num)
+
+        except (json.JSONDecodeError, ValueError) as e:
+            # JSONパース失敗時はエラーを記録
+            for result in results:
+                result["error"] = f"JSON パースエラー: {e}"
+
+        return results
+
+    def _create_empty_result(self, page_num: int) -> dict:
+        """空の結果を作成"""
+        result = {
+            "page": page_num,
+            "raw_response": "",
+            "content_score": None,
+            "expression_deduction": None,
+            "total_score": None,
+            "original_text": "",
+            "corrected_text": "",
+            "content_comment": "",
+            "expression_comment": "",
+            "revision_points": "",
+        }
+
+        # 動的な基準項目を初期化
+        for i, criterion in enumerate(self._criteria.criteria):
+            result[f"criterion{i+1}_judgment"] = ""
+            result[f"criterion{i+1}_score"] = None
+            result[f"criterion{i+1}_name"] = criterion.name
+
+        return result
+
+    def _parse_single_item(self, data: dict, page_num: int) -> dict:
+        """単一の採点結果をパース"""
+        result = self._create_empty_result(page_num)
+
+        # 動的な基準項目を取得
+        for i, criterion in enumerate(self._criteria.criteria):
+            key_prefix = f"criterion{i+1}_"
+            result[f"{key_prefix}judgment"] = data.get(f"{key_prefix}judgment", "")
+            result[f"{key_prefix}score"] = data.get(f"{key_prefix}score")
+
+        # 共通フィールド
+        result.update({
+            "content_score": data.get("content_score") or data.get("内容点"),
+            "expression_deduction": data.get("expression_deduction") or data.get("表現減点"),
+            "total_score": data.get("total_score") or data.get("合計点"),
+            "original_text": data.get("original_text") or data.get("元答案", ""),
+            "corrected_text": data.get("corrected_text") or data.get("添削答案", ""),
+            "content_comment": data.get("content_comment") or data.get("内容コメント", ""),
+            "expression_comment": data.get("expression_comment") or data.get("表現コメント", ""),
+            "revision_points": data.get("revision_points") or data.get("書き直しポイント", ""),
+        })
+
+        return result
+
+
+def merge_student_info(results: list[dict], students: list[dict]) -> list[dict]:
+    """採点結果に生徒情報をマージ
+
+    Args:
+        results: 採点結果のリスト
+        students: 生徒情報のリスト（StudentInfo.to_dict()の結果）
+
+    Returns:
+        生徒情報がマージされた採点結果
+    """
+    # ページ番号でマッピング
+    student_by_page = {s.get("page", 0): s for s in students}
+
+    merged = []
+    for result in results:
+        page = result.get("page", 0)
+        student = student_by_page.get(page, {})
+
+        # 新しい辞書を作成（イミュータブル）
+        merged_result = {
+            **result,
+            "student_name": student.get("name", result.get("student_name", "")),
+            "class_name": student.get("class_name", ""),
+            "full_class_name": student.get("full_class_name", ""),
+            "attendance_no": student.get("attendance_no", 0),
+            "year": student.get("year", 0),
+            "term": student.get("term", ""),
+            "week": student.get("week", 0),
+        }
+        merged.append(merged_result)
+
+    return merged
 
 
 def load_results_from_json(json_path: str) -> list[dict]:
@@ -261,7 +478,14 @@ def load_results_from_json_data(data: list) -> list[dict]:
             "content_comment": item.get("content_comment") or item.get("内容コメント", ""),
             "expression_comment": item.get("expression_comment") or item.get("表現コメント", ""),
             "revision_points": item.get("revision_points") or item.get("書き直しポイント", ""),
+            # 生徒情報
             "student_name": item.get("student_name") or item.get("生徒名", ""),
+            "class_name": item.get("class_name", ""),
+            "full_class_name": item.get("full_class_name", ""),
+            "attendance_no": item.get("attendance_no", 0),
+            "year": item.get("year", 0),
+            "term": item.get("term", ""),
+            "week": item.get("week", 0),
         }
 
         # 動的なcriterion*キーをすべてコピー

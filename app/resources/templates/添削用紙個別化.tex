@@ -1,0 +1,29 @@
+%!usecache
+%!compile = 2
+\documentclass[b4j,landscape]{tetsujsarticle}
+\usepackage{復テ個別化スタイル}
+\endofdump
+
+\def\入力PDF{高２Integrated Writing 添削用紙.pdf}
+
+% === 週ごとに変更する部分 ===
+\def\年度{2025}       % 年度（2025 など）
+\def\学期{後期}       % 前期 or 後期
+\def\週番号{13}       % 前期: 02〜22 / 後期: 01〜21
+\def\クラス{A}        % クラス名（A, B, C など）
+% =========================
+
+\def\貼り込み処理{%
+  %% QRコード：右下に配置（年度_学期_週_クラス_出席番号_氏名 形式）
+  \node[anchor=south east] at ($(current page.south east) + (-1.5cm,1.5cm)$)
+    {\QRcode{1.6cm}{\年度_\学期_\週番号_\クラス_\出席番号_\姓\名}};
+  %% クラス・氏名：QRの左側に配置（下線付き）
+  \node[anchor=south east] at ($(current page.south east) + (-3.5cm,1.8cm)$)
+    {クラス：高2英語\クラス\ihspace{1zw}氏名：\LARGE\下線{\ruby{\姓}{\せい}\ihspace{0.5zw}\ruby{\名}{\めい}}};
+}
+
+\begin{document}
+
+\input{名簿.tex}
+
+\end{document}

@@ -1,0 +1,84 @@
+%!compile = 2
+\documentclass[b4j,landscape,10pt,expert,twoside,twocolumn]{tetsujsarticle}
+\usepackage{鉄緑会英語科}
+\pagestyle{fancy}
+\usepackage{pxfonts}
+\tcbuselibrary{fitting}  % 問題文の自動フィット用
+
+%\余白設定[
+%上余白=1truecm,
+%下余白=上余白,
+%左余白=1.414truecm,
+%左右差=0truecm,
+%段間隔=対称,
+%段組の仕切り線の太さ=.5truept,
+%ヘッダの縦幅=16truept,
+%ヘッダ下端と本文上端の縦間隔=10truept,
+%ヘッダと本文を仕切る線の太さ=0truept,
+%本文下端とフッタ下端の縦間隔=20truept,
+%本文とフッタを仕切る線の太さ=0truept,
+%傍注領域の幅=0truept,
+%本文端と傍注領域との間隔=0truept,
+%傍注同士の縦間隔=\baselineskip,
+%奇数ページの傍注位置=右,
+%偶数ページの傍注位置=左,
+%]
+%
+%\英語科基本用紙設定問題Ｂ５
+
+% === 週ごとに変更する部分 ===
+\def\学期{後期}  % 前期 or 後期
+\def\週番号{13}  % 前期: 02〜22 / 後期: 01〜21（2桁で指定）
+% =========================
+
+% 問題情報を外部ファイルから読み込み
+\input{../週別問題/\学期/第\週番号 週/problem.tex}
+
+\fancyhead[R]{\sffamily 英語実戦講座　英作文B　添削用紙}
+\fancyhead[L]{\sffamily \sffamily \週タイトル　\テーマ}
+\cfoot{}% この行が無いと勝手にフッタ中央にページ番号が出力される
+
+\tcbset{
+  mystyle/.style={
+    colback=white,
+    colframe=black,
+    boxrule=0.5pt,
+    arc=0pt,          % 角を直角に（好みで）
+    valign=top,
+    top=2mm, bottom=2mm, left=2mm, right=2mm
+  }
+}
+
+\begin{document}
+
+\begin{tcolorbox}[mystyle, title=【問題】, fit to height=4cm]
+\問題文
+\end{tcolorbox}
+
+\begin{tcolorbox}[mystyle, title=【構成メモ】, height=5cm]
+
+\end{tcolorbox}
+
+\begin{tcolorbox}[mystyle, title=【解答欄】, height=12cm]
+\br{1.5}
+\行解答欄[行数=10,下線スタイル=\点線,行送り=10pt,末尾=\Wordscount]
+\end{tcolorbox}
+
+\newcolumn
+
+\begin{tcolorbox}[mystyle, title=【解説・板書・メモ】, height=6cm]
+
+\end{tcolorbox}
+
+\begin{tcolorbox}[mystyle, title=【採点欄】, height=12cm]
+
+\end{tcolorbox}
+
+% スキャン基準ラベル
+\begin{tikzpicture}[remember picture, overlay]
+\node[anchor=north east] at ([xshift=-.4cm, yshift=-.4cm]current page.north east) {\マークシート右上ラベル};
+\node[anchor=south east] at ([xshift=-.4cm, yshift=.4cm]current page.south east) {\マークシート右下ラベル};
+\node[anchor=south west] at ([xshift=.4cm, yshift=.4cm]current page.south west) {\マークシート左下ラベル};
+\end{tikzpicture}
+
+\end{document}

@@ -5,12 +5,13 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QGroupBox, QPushButton, QFileDialog, QTextEdit,
-    QCheckBox, QProgressBar
+    QCheckBox, QProgressBar, QSpinBox, QComboBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
 from app.utils.config import Config
 from app.utils.criteria_parser import GradingCriteria, _default_criteria
+from app.workers.review_worker import ReviewWorker
 
 try:
     import fitz  # PyMuPDF
@@ -23,12 +24,14 @@ class ExportPanel(QWidget):
     """PDF出力パネル"""
 
     export_complete = pyqtSignal(str)  # 出力ファイルパス
+    review_complete = pyqtSignal(str)  # 講評テキスト
 
     def __init__(self):
         super().__init__()
         self._results: list[dict] = []
         self._source_pdf: str | None = None
         self._criteria: GradingCriteria = _default_criteria()
+        self._review_worker: ReviewWorker | None = None
         self._setup_ui()
 
     def set_criteria(self, criteria: GradingCriteria):
@@ -62,7 +65,53 @@ class ExportPanel(QWidget):
         self.include_corrected.setChecked(True)
         options_layout.addWidget(self.include_corrected)
 
+        self.include_stamp = QCheckBox("評価スタンプを追加")
+        self.include_stamp.setChecked(True)
+        options_layout.addWidget(self.include_stamp)
+
         layout.addWidget(options_group)
+
+        # スタイル設定
+        style_group = QGroupBox("注釈スタイル")
+        style_layout = QVBoxLayout(style_group)
+
+        # フォント選択
+        font_layout = QHBoxLayout()
+        font_layout.addWidget(QLabel("フォント:"))
+        self.font_combo = QComboBox()
+        self._populate_fonts()
+        font_layout.addWidget(self.font_combo)
+        font_layout.addStretch()
+        style_layout.addLayout(font_layout)
+
+        # フォントサイズ
+        size_layout = QHBoxLayout()
+        size_layout.addWidget(QLabel("フォントサイズ:"))
+        self.font_size_spin = QSpinBox()
+        self.font_size_spin.setRange(6, 16)
+        self.font_size_spin.setValue(8)
+        self.font_size_spin.setSuffix("pt")
+        size_layout.addWidget(self.font_size_spin)
+        size_layout.addStretch()
+        style_layout.addLayout(size_layout)
+
+        # 文字色
+        color_layout = QHBoxLayout()
+        color_layout.addWidget(QLabel("文字色:"))
+        self.color_combo = QComboBox()
+        self.color_combo.addItems([
+            "濃い青（デフォルト）",
+            "赤",
+            "黒",
+            "緑",
+            "紫",
+            "オレンジ"
+        ])
+        color_layout.addWidget(self.color_combo)
+        color_layout.addStretch()
+        style_layout.addLayout(color_layout)
+
+        layout.addWidget(style_group)
 
         # プレビュー
         preview_group = QGroupBox("出力プレビュー")
@@ -90,6 +139,28 @@ class ExportPanel(QWidget):
         # 出力ボタン
         button_layout = QHBoxLayout()
         button_layout.addStretch()
+
+        # 講評生成ボタン
+        self.review_btn = QPushButton("講評を生成")
+        self.review_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9b59b6;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 12px 32px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #8e44ad;
+            }
+            QPushButton:disabled {
+                background-color: #ccc;
+            }
+        """)
+        self.review_btn.clicked.connect(self._generate_review)
+        button_layout.addWidget(self.review_btn)
 
         self.export_btn = QPushButton("PDFを出力")
         self.export_btn.setStyleSheet("""
@@ -169,17 +240,8 @@ class ExportPanel(QWidget):
         try:
             doc = fitz.open(self._source_pdf)
 
-            # 日本語フォントを準備（ヒラギノ or システムフォント）
-            font_path = None
-            possible_fonts = [
-                "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-                "/System/Library/Fonts/Hiragino Sans GB.ttc",
-                "/Library/Fonts/Arial Unicode.ttf",
-            ]
-            for fp in possible_fonts:
-                if Path(fp).exists():
-                    font_path = fp
-                    break
+            # 選択されたフォントを使用
+            font_path = self._get_selected_font()
 
             for i, result in enumerate(self._results):
                 page_num = result.get("page", i + 1) - 1
@@ -209,24 +271,34 @@ class ExportPanel(QWidget):
                     box_y + box_h
                 )
 
+                # スタイル設定を取得
+                font_size = self.font_size_spin.value()
+                color = self._get_selected_color()
+
                 # 日本語フォントでテキスト挿入
                 if font_path:
                     page.insert_textbox(
                         rect,
                         annot_text,
-                        fontsize=8,
+                        fontsize=font_size,
                         fontfile=font_path,
                         fontname="F0",
-                        color=(0, 0, 0.5),  # 濃い青
+                        color=color,
                     )
                 else:
                     # フォールバック：注釈として追加
                     annot = page.add_freetext_annot(
                         rect,
                         annot_text,
-                        fontsize=8,
-                        text_color=(0, 0, 0.5),
+                        fontsize=font_size,
+                        text_color=color,
                     )
+
+                # スタンプを追加
+                if self.include_stamp.isChecked():
+                    total_score = result.get("total_score", 0)
+                    if isinstance(total_score, (int, float)):
+                        self._insert_stamp(page, int(total_score))
 
                 self.progress_bar.setValue(i + 1)
 
@@ -311,3 +383,205 @@ class ExportPanel(QWidget):
         result = re.sub(r'(?<!^)([①②③④⑤⑥⑦⑧⑨⑩])', r'\n\1', result)
         result = re.sub(r'(?<!^)(・)', r'\n\1', result)
         return result
+
+    def _get_selected_color(self) -> tuple:
+        """選択された色をRGBタプルで返す"""
+        color_map = {
+            0: (0, 0, 0.5),      # 濃い青（デフォルト）
+            1: (0.8, 0, 0),      # 赤
+            2: (0, 0, 0),        # 黒
+            3: (0, 0.5, 0),      # 緑
+            4: (0.5, 0, 0.5),    # 紫
+            5: (0.9, 0.5, 0),    # オレンジ
+        }
+        return color_map.get(self.color_combo.currentIndex(), (0, 0, 0.5))
+
+    def _populate_fonts(self):
+        """利用可能なフォントを一覧に追加"""
+        # macOSの日本語フォント候補
+        self._font_list = [
+            ("ヒラギノ角ゴシック W3", "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc"),
+            ("ヒラギノ角ゴシック W6", "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc"),
+            ("ヒラギノ明朝 ProN W3", "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc"),
+            ("ヒラギノ丸ゴ ProN W4", "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc"),
+            ("游ゴシック Medium", "/System/Library/Fonts/YuGothic-Medium.otf"),
+            ("游明朝 Medium", "/System/Library/Fonts/YuMincho-Medium.otf"),
+            ("Osaka", "/System/Library/Fonts/Osaka.ttf"),
+            ("Arial Unicode", "/Library/Fonts/Arial Unicode.ttf"),
+        ]
+
+        for name, path in self._font_list:
+            if Path(path).exists():
+                self.font_combo.addItem(name, path)
+
+        # 何も見つからなかったらデフォルトを追加
+        if self.font_combo.count() == 0:
+            self.font_combo.addItem("（システムフォント）", None)
+
+    def _get_selected_font(self) -> str | None:
+        """選択されたフォントのパスを返す"""
+        return self.font_combo.currentData()
+
+    def _insert_stamp(self, page, score: int):
+        """スタンプを挿入"""
+        stamp_settings = Config.load_stamp_settings()
+
+        if not stamp_settings.get("enabled", True):
+            return
+
+        stamp_path = Config.get_stamp_for_score(score)
+        if not stamp_path or not stamp_path.exists():
+            return
+
+        def mm_to_pt(mm):
+            return mm * 72 / 25.4
+
+        page_rect = page.rect
+        stamp_size = mm_to_pt(stamp_settings.get("size", 50))
+        margin_x = mm_to_pt(stamp_settings.get("margin_x", 10))
+        margin_y = mm_to_pt(stamp_settings.get("margin_y", 10))
+
+        position = stamp_settings.get("position", "top_right")
+
+        # 配置位置を計算
+        if position == "top_right":
+            x = page_rect.width - stamp_size - margin_x
+            y = margin_y
+        elif position == "top_left":
+            x = margin_x
+            y = margin_y
+        elif position == "bottom_right":
+            x = page_rect.width - stamp_size - margin_x
+            y = page_rect.height - stamp_size - margin_y
+        else:  # bottom_left
+            x = margin_x
+            y = page_rect.height - stamp_size - margin_y
+
+        rect = fitz.Rect(x, y, x + stamp_size, y + stamp_size)
+
+        # 画像を挿入
+        page.insert_image(rect, filename=str(stamp_path))
+
+    def _generate_review(self):
+        """講評を生成"""
+        if not self._results:
+            self.preview_text.setText("採点結果がありません")
+            return
+
+        # 元答案テキストがあるかチェック
+        has_original = any(r.get("original_text") for r in self._results)
+        if not has_original:
+            self.preview_text.setText(
+                "元答案テキストがありません。\n"
+                "講評を生成するには、採点を再実行して元答案を取得してください。"
+            )
+            return
+
+        # プロンプトファイルを取得
+        prompt_file = None
+        current = Config.get_current_week()
+        if current:
+            week_path = Config.get_week_path(current["term"], current["week"])
+            prompt_file = week_path / "prompt.txt"
+            if not prompt_file.exists():
+                prompt_file = None
+
+        # UIを更新
+        self.review_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setMaximum(0)  # インデターミネート
+        self.preview_text.setText("講評を生成中...（数分かかる場合があります）")
+
+        # ワーカー開始（画像不要）
+        self._review_worker = ReviewWorker(
+            results=self._results,
+            prompt_file=prompt_file
+        )
+        self._review_worker.progress.connect(self._on_review_progress)
+        self._review_worker.finished.connect(self._on_review_finished)
+        self._review_worker.error.connect(self._on_review_error)
+        self._review_worker.start()
+
+    def _on_review_progress(self, message: str):
+        """講評生成進捗"""
+        self.preview_text.setText(message)
+
+    def _on_review_finished(self, plain_text: str, latex_text: str):
+        """講評生成完了"""
+        self.progress_bar.setVisible(False)
+        self.review_btn.setEnabled(True)
+
+        # 両方を表示
+        display_text = f"=== プレーンテキスト版 ===\n\n{plain_text}"
+        if latex_text:
+            display_text += f"\n\n=== LaTeX版 ===\n\n{latex_text}"
+
+        self.preview_text.setText(display_text)
+        self.review_complete.emit(plain_text)
+
+        # 保存ダイアログ
+        from PyQt6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self,
+            "講評生成完了",
+            "講評を保存しますか？\n（プレーンテキストとLaTeX版の両方を保存します）",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self._save_review_both(plain_text, latex_text)
+
+    def _on_review_error(self, error: str):
+        """講評生成エラー"""
+        self.progress_bar.setVisible(False)
+        self.review_btn.setEnabled(True)
+        self.preview_text.setText(f"エラー: {error}")
+
+    def _save_review(self, review_text: str):
+        """講評を保存（レガシー）"""
+        self._save_review_both(review_text, "")
+
+    def _save_review_both(self, plain_text: str, latex_text: str):
+        """講評を両形式で保存"""
+        # 保存先ディレクトリを選択
+        dir_path = QFileDialog.getExistingDirectory(
+            self,
+            "講評の保存先フォルダを選択",
+            str(Config.get_output_dir())
+        )
+
+        if not dir_path:
+            return
+
+        try:
+            saved_files = []
+
+            # プレーンテキスト版を保存
+            plain_path = Path(dir_path) / "講評.txt"
+            with open(plain_path, "w", encoding="utf-8") as f:
+                f.write(plain_text)
+            saved_files.append(str(plain_path))
+
+            # LaTeX版を保存
+            if latex_text:
+                latex_path = Path(dir_path) / "講評.tex"
+                with open(latex_path, "w", encoding="utf-8") as f:
+                    f.write(latex_text)
+                saved_files.append(str(latex_path))
+
+            self.preview_text.setText(
+                f"講評を保存しました:\n" +
+                "\n".join(f"  - {f}" for f in saved_files) +
+                f"\n\n=== プレーンテキスト版 ===\n\n{plain_text}"
+            )
+
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(
+                self,
+                "保存完了",
+                f"講評を保存しました:\n" + "\n".join(saved_files)
+            )
+
+        except Exception as e:
+            self.preview_text.setText(f"保存エラー: {e}")

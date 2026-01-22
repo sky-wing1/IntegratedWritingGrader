@@ -29,3 +29,8 @@ build/
 # Temporary files
 *.tmp
 *.log
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
