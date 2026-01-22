@@ -1,9 +1,12 @@
 """添削用紙出力パネル"""
 
 from __future__ import annotations
+import logging
 import subprocess
 import shutil
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QGroupBox, QPushButton, QFileDialog,
@@ -179,7 +182,7 @@ class LatexCompileWorker(QThread):
                 )
                 if result.returncode != 0 and i == 1:
                     # 2回目で失敗したらエラー
-                    print(f"uplatex error: {result.stderr}")
+                    logger.error("uplatex error: %s", result.stderr)
                     return None
             except subprocess.TimeoutExpired:
                 return None
@@ -201,7 +204,7 @@ class LatexCompileWorker(QThread):
                 env=env
             )
             if result.returncode != 0:
-                print(f"dvipdfmx error: {result.stderr}")
+                logger.error("dvipdfmx error: %s", result.stderr)
                 return None
         except subprocess.TimeoutExpired:
             return None
