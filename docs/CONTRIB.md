@@ -135,10 +135,12 @@ codesign --force --deep --sign - dist/IntegratedWritingGrader.app
 ### External Tools (optional)
 | Tool | Path | Purpose |
 |------|------|---------|
-| Claude Code CLI | `claude` | AI grading |
+| Claude Code CLI | Auto-detected* | AI grading |
 | uplatex/dvipdfmx | `/usr/local/teTeX/bin/` | LaTeX compilation |
 | DyNAMiKS.app | `/Applications/` | Mark sheet integration |
 | scancrop | `/usr/local/tetex/bin/` | PDF auto-crop |
+
+*Claude CLI is automatically detected in: PATH, nvm, Homebrew, npm global, yarn global
 
 ## Testing
 
@@ -157,6 +159,7 @@ Currently no automated tests. Manual testing workflow:
 - No print statements (use logging)
 - Keep files under 800 lines
 - Prefer immutable patterns
+- Use helper functions for shared logic (e.g., `_find_claude_command()`, `_get_claude_env()`)
 
 ## Pull Request Process
 

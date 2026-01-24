@@ -84,9 +84,38 @@ which claude
 
 # Is it authenticated?
 claude --version
+
+# Check common installation paths
+ls ~/.nvm/versions/node/*/bin/claude
+ls /opt/homebrew/bin/claude
+ls /usr/local/bin/claude
 ```
 
 **Fix:** Install and authenticate Claude Code CLI.
+
+**Note:** The app automatically searches for `claude` in these locations:
+- PATH environment variable
+- nvm (Node Version Manager): `~/.nvm/versions/node/*/bin/`
+- Homebrew: `/opt/homebrew/bin/`, `/usr/local/bin/`
+- npm global: `~/.npm-global/bin/`
+- yarn global: `~/.yarn/bin/`
+
+### Claude CLI Not Found (Bundled App)
+
+**Symptom:** "claude コマンドが見つかりません" error when running from /Applications/.
+
+**Cause:** Bundled macOS apps have limited PATH environment.
+
+**Checks:**
+```bash
+# Verify claude is installed somewhere
+find ~ -name "claude" -type f 2>/dev/null | head -5
+```
+
+**Fix:** The app now automatically detects claude in common locations. If still failing:
+1. Ensure claude is installed via `npm install -g @anthropic/claude-code`
+2. Note the installation path
+3. The app should find it automatically on next launch
 
 ### LaTeX Compilation Fails
 
@@ -169,6 +198,7 @@ If `/usr/local/tetex/bin/scancrop` exists, automatic PDF cropping is available.
 - AI grading runs sequentially to avoid rate limits
 - Background workers prevent UI freezing
 - Feedback editing auto-saves with 500ms debounce
+- Claude CLI path is cached after first detection
 
 ## Resuming Work
 
