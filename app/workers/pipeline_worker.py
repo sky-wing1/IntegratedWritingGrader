@@ -90,6 +90,8 @@ class PipelineWorker(QThread):
         shutil.copy2(input_path, temp_pdf)
 
         # scancropコマンド（QRコード読み取り＆ページソート）
+        # 注: --crop オプションはDyNAMiKS三点マークでの傾き補正用だが、
+        #     現在のPDFではクラッシュするため使用しない
         cmd = [
             str(scancrop_path),
             "--read-qr",
@@ -145,11 +147,12 @@ class PipelineWorker(QThread):
         def mm_to_pt(mm):
             return mm * 72 / 25.4
 
-        # 答案エリア: 左上原点で X=10mm, Y=86.8mm, W=176.7mm, H=115mm
-        crop_x = mm_to_pt(10)
-        crop_y = mm_to_pt(86.8)
-        crop_w = mm_to_pt(176.7)
-        crop_h = mm_to_pt(115)
+        # 答案エリア: 左上原点で X=5mm, Y=112mm, W=175mm, H=140mm
+        # 【解答欄】ヘッダーから「○○ words)」まで含む
+        crop_x = mm_to_pt(5)
+        crop_y = mm_to_pt(112)
+        crop_w = mm_to_pt(175)
+        crop_h = mm_to_pt(140)
 
         for page_num in range(len(doc)):
             page = doc[page_num]

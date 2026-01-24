@@ -36,9 +36,11 @@ xattr -cr /Applications/IntegratedWritingGrader.app
 | Type | Location |
 |------|----------|
 | App data | `~/Documents/IntegratedWritingGrader/` |
+| Week problems | `~/Documents/IntegratedWritingGrader/weeks/{term}/第{nn}週/problem.tex` |
+| Week prompts | `~/Documents/IntegratedWritingGrader/weeks/{term}/第{nn}週/prompt.txt` |
 | Grading results | `~/Documents/IntegratedWritingGrader/{year}{term}/Week{nn}/results.json` |
 | Cropped images | `~/Documents/IntegratedWritingGrader/{year}{term}/Week{nn}/cropped/` |
-| Worksheets | `~/Library/Application Support/IntegratedWritingGrader/worksheets/` |
+| Worksheets | Generated on demand (temp directory) |
 
 ## Common Issues and Fixes
 
@@ -98,9 +100,27 @@ which dvipdfmx
 
 # Check TeX bin path
 ls /usr/local/teTeX/bin/
+
+# Check TeXShop uplatex2pdf (preferred)
+ls ~/Library/TeXShop/bin/uplatex2pdf
 ```
 
 **Fix:** Install MacTeX or update path in `app/utils/config.py`.
+
+### Week Problem File Missing
+
+**Symptom:** "problem.tex not found" error.
+
+**Checks:**
+```bash
+# Check weeks directory
+ls ~/Documents/IntegratedWritingGrader/weeks/
+
+# Check specific week
+ls ~/Documents/IntegratedWritingGrader/weeks/後期/第14週/
+```
+
+**Fix:** Use the "週管理" tab to create problem.tex for the week.
 
 ### scancrop Not Found
 
@@ -148,6 +168,15 @@ If `/usr/local/tetex/bin/scancrop` exists, automatic PDF cropping is available.
 - Large PDFs (100+ pages) may take time to process
 - AI grading runs sequentially to avoid rate limits
 - Background workers prevent UI freezing
+- Feedback editing auto-saves with 500ms debounce
+
+## Resuming Work
+
+To resume a previous grading session:
+1. Select the term and week
+2. Choose "保存済み結果を読み込み" from the dropdown
+3. Select the saved result from the dialog
+4. Continue editing
 
 ## Logs
 

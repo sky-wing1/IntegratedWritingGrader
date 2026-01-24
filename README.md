@@ -6,10 +6,15 @@
 
 - **PDF読み込み**: スキャンした答案PDFを読み込み、プレビュー表示
 - **AI採点**: Claude Code CLIを使って自動採点
-- **手動編集**: AI採点結果の確認・修正
+- **手動編集**: AI採点結果の確認・修正（自動保存対応）
+- **保存済み結果の読み込み**: 中断した採点を再開可能
 - **動的採点基準**: 週ごとに異なる採点基準を自動で読み込み
+- **週管理**: problem.tex・prompt.txtの編集
 - **PDF出力**: 採点結果を元のPDFに注釈として追加
 - **添削用紙生成**: LaTeXテンプレートから個別化された添削用紙を生成
+- **バッチ処理**: 複数クラスの一括処理
+- **名簿管理**: 生徒名簿の管理・紐付け
+- **スタンプ機能**: PDF注釈の一括追加
 - **データ保存**: 学期・週ごとに採点結果をJSON形式で保存
 
 ## 必要環境
@@ -79,10 +84,17 @@ open /Applications/IntegratedWritingGrader.app
 
 ```
 ~/Documents/IntegratedWritingGrader/
-├── 2024前期/
+├── weeks/                    # 週別問題データ
+│   ├── 前期/
+│   │   └── 第01週/
+│   │       ├── problem.tex   # 問題文
+│   │       └── prompt.txt    # 採点基準
+│   └── 後期/
+│       └── ...
+├── 2024前期/                 # 採点結果
 │   ├── Week01/
-│   │   ├── cropped/        # クロップ画像
-│   │   └── results.json    # 採点結果
+│   │   ├── cropped/          # クロップ画像
+│   │   └── results.json      # 採点結果
 │   └── Week13/
 │       └── ...
 └── 2024後期/
@@ -96,11 +108,12 @@ open /Applications/IntegratedWritingGrader.app
 
 ## 依存関係
 
-| Package | Purpose |
-|---------|---------|
-| PyQt6 | GUI |
-| PyMuPDF | PDF処理 |
-| py2app | macOSアプリ化 |
+| Package | Version | Purpose |
+|---------|---------|---------|
+| PyQt6 | >=6.10.0 | GUI |
+| PyMuPDF | >=1.26.0 | PDF処理 |
+| py2app | >=0.28.0 | macOSアプリ化 |
+| Pillow | >=10.0.0 | アイコン生成 |
 
 ## ライセンス
 

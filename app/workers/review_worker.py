@@ -8,6 +8,7 @@ from typing import List, Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from app.utils.config import Config
+from app.workers.grading_worker import _find_claude_command, _get_claude_env
 
 
 # 講評生成プロンプト
@@ -163,8 +164,9 @@ class ReviewWorker(QThread):
 {REVIEW_PROMPT}"""
 
             # Claude Code CLI呼び出し（画像読み込み不要）
+            claude_cmd = _find_claude_command()
             cmd = [
-                "claude",
+                claude_cmd,
                 "-p", full_prompt,
             ]
 
@@ -172,7 +174,8 @@ class ReviewWorker(QThread):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5分タイムアウト（画像なしなので短縮）
+                timeout=300,  # 5分タイムアウト（画像なしなので短縮）
+                env=_get_claude_env()
             )
 
             if self._is_cancelled:

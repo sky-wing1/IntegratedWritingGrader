@@ -51,34 +51,44 @@ This creates `dist/IntegratedWritingGrader.app` using py2app.
 ```
 IntegratedWritingGrader/
 ├── app/
-│   ├── main.py              # Entry point
-│   ├── main_window.py       # Main window UI
-│   ├── widgets/             # UI components
-│   │   ├── week_selector.py
-│   │   ├── pdf_preview.py
-│   │   ├── feedback_editor.py
-│   │   ├── export_panel.py
-│   │   ├── progress_panel.py
-│   │   ├── integrated_grading_panel.py
-│   │   └── worksheet_panel.py
-│   ├── workers/             # Background workers
-│   │   ├── grading_worker.py
-│   │   └── pipeline_worker.py
-│   ├── utils/               # Utilities
-│   │   ├── config.py
-│   │   ├── criteria_parser.py
-│   │   └── roster_manager.py
+│   ├── main.py                    # Entry point
+│   ├── main_window.py             # Main window UI
+│   ├── widgets/                   # UI components
+│   │   ├── week_selector.py       # 学期・週選択
+│   │   ├── pdf_preview.py         # PDFプレビュー
+│   │   ├── pdf_loader_panel.py    # PDF読み込みパネル
+│   │   ├── feedback_editor.py     # 採点結果編集（自動保存）
+│   │   ├── export_panel.py        # PDF出力パネル
+│   │   ├── progress_panel.py      # 進捗表示・保存済み読み込み
+│   │   ├── integrated_grading_panel.py  # 採点統合パネル
+│   │   ├── worksheet_panel.py     # 添削用紙生成
+│   │   ├── week_manager_panel.py  # 週管理（problem.tex編集）
+│   │   ├── batch_panel.py         # バッチ処理パネル
+│   │   ├── roster_panel.py        # 名簿管理パネル
+│   │   └── stamp_panel.py         # スタンプ機能パネル
+│   ├── workers/                   # Background workers
+│   │   ├── grading_worker.py      # AI採点ワーカー
+│   │   ├── pipeline_worker.py     # パイプラインワーカー
+│   │   ├── batch_worker.py        # バッチ処理ワーカー
+│   │   └── review_worker.py       # レビューワーカー
+│   ├── utils/                     # Utilities
+│   │   ├── config.py              # アプリ設定・パス管理
+│   │   ├── criteria_parser.py     # 採点基準パーサー
+│   │   ├── roster_manager.py      # 名簿管理
+│   │   └── qr_parser.py           # QRコードパーサー
 │   └── resources/
-│       └── templates/       # LaTeX templates
+│       └── templates/             # LaTeXテンプレート
 ├── scripts/
-│   └── generate_icon.py     # App icon generator
+│   └── generate_icon.py           # App icon generator
 ├── resources/
-│   └── AppIcon.icns         # App icon
-├── docs/                    # Documentation
-├── .reports/                # Analysis reports
-├── build.sh                 # Build script (py2app)
-├── setup.py                 # py2app configuration
-├── requirements.txt         # Python dependencies
+│   └── AppIcon.icns               # App icon
+├── docs/                          # Documentation
+├── .reports/                      # Analysis reports
+├── build.sh                       # Build script (py2app)
+├── run_app.sh                     # Development run script
+├── 英作文採点.command              # Double-click launcher
+├── setup.py                       # py2app configuration
+├── requirements.txt               # Python dependencies
 └── README.md
 ```
 
@@ -86,9 +96,27 @@ IntegratedWritingGrader/
 
 | Script | Description |
 |--------|-------------|
-| `英作文採点.command` | Launch app in development mode |
+| `英作文採点.command` | Launch app in development mode (double-click) |
+| `run_app.sh` | Launch app in development mode (terminal) |
 | `build.sh` | Build standalone macOS app with py2app |
 | `scripts/generate_icon.py` | Generate AppIcon.icns from source |
+
+### Build Commands
+
+```bash
+# Development run
+./run_app.sh
+
+# Production build
+./build.sh
+
+# Manual build
+source .venv/bin/activate
+python setup.py py2app
+
+# Code sign (optional, for distribution)
+codesign --force --deep --sign - dist/IntegratedWritingGrader.app
+```
 
 ## Dependencies
 
@@ -96,13 +124,21 @@ IntegratedWritingGrader/
 | Package | Version | Purpose |
 |---------|---------|---------|
 | PyQt6 | >=6.10.0 | GUI framework |
-| PyMuPDF | >=1.26.0 | PDF processing |
+| PyMuPDF | >=1.26.0 | PDF processing (fitz) |
 
 ### Build
 | Package | Version | Purpose |
 |---------|---------|---------|
-| py2app | latest | macOS app bundling |
+| py2app | >=0.28.0 | macOS app bundling |
 | Pillow | >=10.0.0 | Icon generation |
+
+### External Tools (optional)
+| Tool | Path | Purpose |
+|------|------|---------|
+| Claude Code CLI | `claude` | AI grading |
+| uplatex/dvipdfmx | `/usr/local/teTeX/bin/` | LaTeX compilation |
+| DyNAMiKS.app | `/Applications/` | Mark sheet integration |
+| scancrop | `/usr/local/tetex/bin/` | PDF auto-crop |
 
 ## Testing
 

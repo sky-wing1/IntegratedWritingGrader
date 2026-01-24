@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -12,6 +14,86 @@ from app.utils.criteria_parser import (
     GradingCriteria,
     _default_criteria,
 )
+
+
+def _find_claude_command() -> str:
+    """claudeコマンドのパスを検索
+
+    バンドルされたアプリ内ではPATHが制限されているため、
+    一般的なインストール先を順番に探す。
+    """
+    # 1. PATHにあればそれを使う
+    claude_path = shutil.which("claude")
+    if claude_path:
+        return claude_path
+
+    # 2. 一般的なインストール先を探す
+    home = Path.home()
+    common_paths = [
+        # nvm経由のNode.js
+        home / ".nvm/versions/node",
+        # Homebrew
+        Path("/opt/homebrew/bin"),
+        Path("/usr/local/bin"),
+        # npm global
+        home / ".npm-global/bin",
+        # yarn global
+        home / ".yarn/bin",
+    ]
+
+    # nvmの場合は最新バージョンを探す
+    nvm_path = home / ".nvm/versions/node"
+    if nvm_path.exists():
+        versions = sorted(nvm_path.iterdir(), reverse=True)
+        for ver in versions:
+            claude_bin = ver / "bin/claude"
+            if claude_bin.exists():
+                return str(claude_bin)
+
+    # その他のパスを探す
+    for p in common_paths:
+        if p.is_file() and p.name == "claude":
+            return str(p)
+        claude_bin = p / "claude"
+        if claude_bin.exists():
+            return str(claude_bin)
+
+    # 見つからない場合はそのまま "claude" を返す（エラーになる）
+    return "claude"
+
+
+def _get_claude_env() -> dict:
+    """Claude CLI実行用の環境変数を取得
+
+    バンドルされたアプリ内ではPATHが制限されているため、
+    一般的なNode.jsインストール先をPATHに追加する。
+    """
+    env = os.environ.copy()
+    home = Path.home()
+
+    # nvmの最新バージョンを動的に取得
+    nvm_bin_path = None
+    nvm_path = home / ".nvm/versions/node"
+    if nvm_path.exists():
+        versions = sorted(nvm_path.iterdir(), reverse=True)
+        for ver in versions:
+            bin_path = ver / "bin"
+            if bin_path.exists():
+                nvm_bin_path = str(bin_path)
+                break
+
+    extra_paths = [
+        p for p in [
+            nvm_bin_path,
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            str(home / ".npm-global/bin"),
+            str(home / ".yarn/bin"),
+        ] if p
+    ]
+
+    env["PATH"] = ":".join(extra_paths) + ":" + env.get("PATH", "")
+    return env
 
 
 class GradingWorker(QThread):
@@ -105,9 +187,12 @@ class GradingWorker(QThread):
 重要: 必ず全{len(image_files)}件分の結果を配列で返してください。"""
 
         try:
+            # claudeコマンドのパスを取得
+            claude_cmd = _find_claude_command()
+
             # Claude Code CLI呼び出し
             cmd = [
-                "claude",
+                claude_cmd,
                 "-p", full_prompt,
                 "--allowedTools", "Read",  # 画像読み込み許可
             ]
@@ -116,17 +201,29 @@ class GradingWorker(QThread):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=600  # 10分タイムアウト
+                timeout=600,  # 10分タイムアウト
+                env=_get_claude_env()
             )
 
+            # デバッグ用: 結果をログに保存
+            raw_output = result.stdout or ""
+            raw_stderr = result.stderr or ""
+
             if result.returncode == 0:
-                return self._parse_batch_result(result.stdout, len(image_files))
+                parsed_results = self._parse_batch_result(raw_output, len(image_files))
+                # raw_responseを全結果に追加（デバッグ用）
+                for r in parsed_results:
+                    if not r.get("raw_response"):
+                        r["raw_response"] = raw_output
+                return parsed_results
             else:
                 # エラー時は全ページ分のエラー結果を返す
+                error_msg = f"CLI エラー (code={result.returncode}): {raw_stderr[:500]}"
                 return [
                     {
                         "page": i + 1,
-                        "error": f"CLI エラー: {result.stderr}",
+                        "error": error_msg,
+                        "raw_response": raw_output,
                         "total_score": None
                     }
                     for i in range(len(image_files))
@@ -168,9 +265,12 @@ class GradingWorker(QThread):
 ```"""
 
         try:
+            # claudeコマンドのパスを取得
+            claude_cmd = _find_claude_command()
+
             # Claude Code CLI呼び出し
             cmd = [
-                "claude",
+                claude_cmd,
                 "-p", full_prompt,
                 "--allowedTools", "Read",  # 画像読み込み許可
             ]
@@ -179,7 +279,8 @@ class GradingWorker(QThread):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=180  # 3分タイムアウト
+                timeout=180,  # 3分タイムアウト
+                env=_get_claude_env()
             )
 
             if result.returncode == 0:
@@ -338,6 +439,13 @@ class GradingWorker(QThread):
         for i in range(total_pages):
             results.append(self._create_empty_result(i + 1))
 
+        # 出力が空の場合
+        if not text or not text.strip():
+            for result in results:
+                result["error"] = "CLIからの出力が空です"
+                result["raw_response"] = text
+            return results
+
         try:
             # ```json ... ``` を探す
             if "```json" in text:
@@ -350,6 +458,10 @@ class GradingWorker(QThread):
                 json_end = text.rfind("]") + 1
                 json_text = text[json_start:json_end]
             else:
+                # JSONが見つからない場合
+                for result in results:
+                    result["error"] = "JSON形式の結果が見つかりません"
+                    result["raw_response"] = text[:2000]  # 最初の2000文字を保存
                 return results
 
             data = json.loads(json_text)
@@ -364,6 +476,7 @@ class GradingWorker(QThread):
             # JSONパース失敗時はエラーを記録
             for result in results:
                 result["error"] = f"JSON パースエラー: {e}"
+                result["raw_response"] = text[:2000]
 
         return results
 
