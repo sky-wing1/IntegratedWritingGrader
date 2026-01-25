@@ -6,6 +6,7 @@ import json
 import logging
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -17,7 +18,12 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+import certifi
+
 from app import __version__
+
+# SSL context with certifi certificates
+SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +62,7 @@ class UpdateChecker:
                 GITHUB_API_URL,
                 headers={"Accept": "application/vnd.github.v3+json"}
             )
-            with urlopen(request, timeout=10) as response:
+            with urlopen(request, timeout=10, context=SSL_CONTEXT) as response:
                 data = json.loads(response.read().decode("utf-8"))
 
             tag_name = data.get("tag_name", "")
@@ -141,7 +147,7 @@ class UpdateChecker:
         zip_path = temp_dir / f"IntegratedWritingGrader-v{release.version}.zip"
 
         request = Request(release.download_url)
-        with urlopen(request, timeout=60) as response:
+        with urlopen(request, timeout=60, context=SSL_CONTEXT) as response:
             total_size = int(response.headers.get("Content-Length", 0))
             downloaded = 0
             chunk_size = 8192
