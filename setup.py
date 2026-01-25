@@ -3,7 +3,12 @@ py2app build script for IntegratedWritingGrader
 Usage: python setup.py py2app
 """
 
+import re
 from setuptools import setup
+
+# Read version from app/__init__.py
+with open('app/__init__.py', 'r', encoding='utf-8') as f:
+    VERSION = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', f.read()).group(1)
 
 APP = ['app/main.py']
 DATA_FILES = [
@@ -21,8 +26,8 @@ OPTIONS = {
         'CFBundleName': 'IntegratedWritingGrader',
         'CFBundleDisplayName': '英作文採点',
         'CFBundleIdentifier': 'com.integratedwritinggrader.app',
-        'CFBundleVersion': '1.0.0',
-        'CFBundleShortVersionString': '1.0.0',
+        'CFBundleVersion': VERSION,
+        'CFBundleShortVersionString': VERSION,
         'NSHighResolutionCapable': True,
         'NSRequiresAquaSystemAppearance': False,
         'LSMinimumSystemVersion': '10.15',
