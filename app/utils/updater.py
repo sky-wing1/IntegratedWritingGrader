@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from urllib.error import URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from app import __version__
@@ -22,6 +24,9 @@ logger = logging.getLogger(__name__)
 GITHUB_REPO = "sky-wing1/IntegratedWritingGrader"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 APP_INSTALL_PATH = Path("/Applications/IntegratedWritingGrader.app")
+
+# Security: Allowed download hosts for update files
+ALLOWED_DOWNLOAD_HOSTS = {"github.com", "objects.githubusercontent.com"}
 
 
 @dataclass
@@ -95,6 +100,21 @@ class UpdateChecker:
         except ValueError:
             return False
 
+    def _validate_download_url(self, url: str) -> bool:
+        """Validate that download URL is from trusted GitHub domain"""
+        parsed = urlparse(url)
+        return parsed.scheme == "https" and parsed.netloc in ALLOWED_DOWNLOAD_HOSTS
+
+    def _safe_extract(self, zip_path: Path, extract_dir: Path) -> None:
+        """Safely extract ZIP file, preventing path traversal (Zip Slip)"""
+        extract_dir_resolved = extract_dir.resolve()
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for member in zf.namelist():
+                target_path = (extract_dir / member).resolve()
+                if not str(target_path).startswith(str(extract_dir_resolved)):
+                    raise ValueError(f"Attempted path traversal in ZIP: {member}")
+            zf.extractall(extract_dir)
+
     def download_update(
         self,
         release: ReleaseInfo,
@@ -109,7 +129,14 @@ class UpdateChecker:
 
         Returns:
             ダウンロードしたZIPファイルのパス
+
+        Raises:
+            ValueError: If download URL is from untrusted domain
         """
+        # Security: Validate download URL is from trusted domain
+        if not self._validate_download_url(release.download_url):
+            raise ValueError(f"Untrusted download URL: {release.download_url}")
+
         temp_dir = Path(tempfile.mkdtemp())
         zip_path = temp_dir / f"IntegratedWritingGrader-v{release.version}.zip"
 
@@ -146,9 +173,8 @@ class UpdateChecker:
         extract_dir = temp_dir / "extracted"
 
         try:
-            # ZIP解凍
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(extract_dir)
+            # ZIP解凍（安全な解凍でパストラバーサル攻撃を防止）
+            self._safe_extract(zip_path, extract_dir)
 
             # 解凍された.appを探す
             app_path = None
@@ -168,8 +194,9 @@ class UpdateChecker:
                     shutil.rmtree(APP_INSTALL_PATH)
                 except PermissionError:
                     logger.info("Requesting admin privileges for installation")
+                    # Security: Use shlex.quote() to prevent shell injection
                     script = f'''
-                    do shell script "rm -rf '{APP_INSTALL_PATH}' && cp -R '{app_path}' '{APP_INSTALL_PATH}'" with administrator privileges
+                    do shell script "rm -rf {shlex.quote(str(APP_INSTALL_PATH))} && cp -R {shlex.quote(str(app_path))} {shlex.quote(str(APP_INSTALL_PATH))}" with administrator privileges
                     '''
                     result = subprocess.run(
                         ["osascript", "-e", script],

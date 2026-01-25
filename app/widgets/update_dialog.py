@@ -194,3 +194,10 @@ class UpdateDialog(QDialog):
         self.update_btn.setEnabled(True)
         self.later_btn.setEnabled(True)
         QMessageBox.critical(self, "アップデートエラー", error)
+
+    def closeEvent(self, event):
+        """Handle dialog close - cleanup worker thread"""
+        if self._download_worker and self._download_worker.isRunning():
+            self._download_worker.terminate()
+            self._download_worker.wait(3000)
+        super().closeEvent(event)
