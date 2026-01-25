@@ -23,6 +23,7 @@ from app.workers.pipeline_worker import PipelineWorker
 from app.workers.grading_worker import GradingWorker, load_results_from_json
 from app.utils.config import Config
 from app.utils.criteria_parser import parse_criteria_from_prompt, GradingCriteria, _default_criteria
+from app import __version__
 
 
 class MainWindow(QMainWindow):
@@ -136,7 +137,7 @@ class MainWindow(QMainWindow):
         layout.addStretch()
 
         # バージョン
-        version = QLabel("v1.0.0")
+        version = QLabel(f"v{__version__}")
         version.setStyleSheet("color: #9b9a97; font-size: 11px; padding: 8px 16px;")
         layout.addWidget(version)
 
