@@ -105,7 +105,7 @@ def generate_meibo_tex(roster: ClassRoster, output_path: str | Path) -> Path:
     """
     output_path = Path(output_path)
     lines = [
-        f"%!TEX root = 添削用紙個別化.tex",
+        f"%!TEX root = worksheet.tex",
         f"% 出席番号順に記載（コメントアウトで出力をスキップ可能）",
         f"% {roster.year} {roster.class_name} クラス名簿",
         "",

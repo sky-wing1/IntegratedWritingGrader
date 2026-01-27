@@ -48,7 +48,7 @@ class LatexCompileWorker(QThread):
 
             # Step 1: 名簿.tex を生成
             self.progress.emit("名簿ファイルを生成中...")
-            meibo_path = self.template_dir / "名簿.tex"
+            meibo_path = self.template_dir / "roster.tex"
             generate_meibo_tex(self.roster, meibo_path)
 
             # Step 1.5: problem.tex を準備（なければダミーを生成）
@@ -57,13 +57,13 @@ class LatexCompileWorker(QThread):
 
             # Step 2: ベーステンプレートの学期・週を更新
             self.progress.emit("テンプレートを準備中...")
-            base_tex = self.template_dir / "高２Integrated Writing 添削用紙.tex"
+            base_tex = self.template_dir / "base_template.tex"
 
             if not base_tex.exists():
                 raise FileNotFoundError(f"ベーステンプレートが見つかりません: {base_tex}")
 
             # 元のファイルをバックアップ
-            base_tex_backup = self.template_dir / "高２Integrated Writing 添削用紙.tex.bak"
+            base_tex_backup = self.template_dir / "base_template.tex.bak"
             shutil.copy(base_tex, base_tex_backup)
 
             try:
@@ -111,13 +111,13 @@ class LatexCompileWorker(QThread):
 
             # Step 4: 個別化テンプレートの学期・週・クラスを更新
             self.progress.emit("個別化テンプレートを準備中...")
-            personal_tex = self.template_dir / "添削用紙個別化.tex"
+            personal_tex = self.template_dir / "worksheet.tex"
 
             if not personal_tex.exists():
                 raise FileNotFoundError(f"個別化テンプレートが見つかりません: {personal_tex}")
 
             # 元のファイルをバックアップ
-            personal_tex_backup = self.template_dir / "添削用紙個別化.tex.bak"
+            personal_tex_backup = self.template_dir / "worksheet.tex.bak"
             shutil.copy(personal_tex, personal_tex_backup)
 
             try:

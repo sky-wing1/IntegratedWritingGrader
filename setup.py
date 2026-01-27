@@ -13,10 +13,11 @@ with open('app/__init__.py', 'r', encoding='utf-8') as f:
 APP = ['app/main.py']
 DATA_FILES = [
     ('app/resources/templates', [
-        'app/resources/templates/名簿.tex',
-        'app/resources/templates/復テ個別化スタイル.sty',
-        'app/resources/templates/添削用紙個別化.tex',
-        'app/resources/templates/高２Integrated Writing 添削用紙.tex',
+        'app/resources/templates/roster.tex',
+        'app/resources/templates/worksheet_style.sty',
+        'app/resources/templates/worksheet.tex',
+        'app/resources/templates/base_template.tex',
+        'app/resources/templates/base_template.pdf',
     ]),
 ]
 OPTIONS = {
