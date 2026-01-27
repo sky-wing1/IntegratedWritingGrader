@@ -43,6 +43,12 @@ echo ""
 echo "Removing quarantine attributes..."
 xattr -cr dist/IntegratedWritingGrader.app
 
+# 実行権限を明示的に設定（念のため）
+echo ""
+echo "Setting executable permissions..."
+chmod +x dist/IntegratedWritingGrader.app/Contents/MacOS/IntegratedWritingGrader
+chmod +x dist/IntegratedWritingGrader.app/Contents/MacOS/python
+
 # 完了
 echo ""
 echo "=========================================="
@@ -52,8 +58,8 @@ echo ""
 echo "App location: dist/IntegratedWritingGrader.app"
 echo "App size: $(du -sh dist/IntegratedWritingGrader.app | cut -f1)"
 echo ""
-echo "To install:"
-echo "  cp -r dist/IntegratedWritingGrader.app /Applications/"
+echo "To install (use -pR to preserve permissions):"
+echo "  cp -pR dist/IntegratedWritingGrader.app /Applications/"
 echo ""
 echo "To run:"
 echo "  open dist/IntegratedWritingGrader.app"
