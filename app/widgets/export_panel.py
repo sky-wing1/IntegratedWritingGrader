@@ -32,11 +32,16 @@ class ExportPanel(QWidget):
         self._source_pdf: str | None = None
         self._criteria: GradingCriteria = _default_criteria()
         self._review_worker: ReviewWorker | None = None
+        self._is_additional_mode = False
         self._setup_ui()
 
     def set_criteria(self, criteria: GradingCriteria):
         """採点基準を設定"""
         self._criteria = criteria
+
+    def set_additional_mode(self, is_additional: bool, week: int = 0, count: int = 0):
+        """追加答案モードを設定"""
+        self._is_additional_mode = is_additional
 
     def _setup_ui(self):
         """UI構築"""
@@ -219,10 +224,15 @@ class ExportPanel(QWidget):
         if not self._source_pdf or not self._results:
             return
 
+        # デフォルトファイル名
+        default_name = "graded.pdf"
+        if self._is_additional_mode:
+            default_name = "graded_additional.pdf"
+
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "採点済みPDFを保存",
-            str(Config.get_output_dir() / "graded.pdf"),
+            str(Config.get_output_dir() / default_name),
             "PDF Files (*.pdf)"
         )
 
