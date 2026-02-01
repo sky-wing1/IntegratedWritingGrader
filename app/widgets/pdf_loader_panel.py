@@ -5,13 +5,15 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QGroupBox, QPushButton, QFileDialog, QTextEdit,
-    QProgressBar, QMessageBox, QFrame, QGridLayout
+    QProgressBar, QMessageBox, QFrame, QGridLayout,
+    QListWidget, QListWidgetItem
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 
 from app.utils.config import Config
 from app.workers.pipeline_worker import PipelineWorker
+from app.utils.additional_answer_manager import AdditionalAnswerManager, AdditionalAnswerItem
 
 
 class DropArea(QFrame):
@@ -101,12 +103,14 @@ class PdfLoaderPanel(QWidget):
     """PDF読み込みパネル"""
 
     pdf_loaded = pyqtSignal(str, dict)  # (PDFパス, 検出された情報)
+    additional_grading_requested = pyqtSignal(list)  # 追加答案採点リクエスト
 
     def __init__(self):
         super().__init__()
         self._current_pdf_path: str | None = None
         self._pipeline_worker: PipelineWorker | None = None
         self._detected_info: dict = {}
+        self._additional_items: list[AdditionalAnswerItem] = []
         self._setup_ui()
 
     def _setup_ui(self):
@@ -225,6 +229,63 @@ class PdfLoaderPanel(QWidget):
         self.start_btn.clicked.connect(self._on_start_clicked)
         layout.addWidget(self.start_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
+        # 追加答案セクション
+        self.additional_group = QGroupBox("追加答案")
+        self.additional_group.setVisible(False)
+        additional_layout = QVBoxLayout(self.additional_group)
+
+        self.additional_header = QLabel("検出された追加答案はありません")
+        self.additional_header.setStyleSheet("color: #6b6b6b; font-size: 13px;")
+        additional_layout.addWidget(self.additional_header)
+
+        self.additional_list = QListWidget()
+        self.additional_list.setMaximumHeight(150)
+        self.additional_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self.additional_list.setStyleSheet("""
+            QListWidget {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            QListWidget::item:selected {
+                background-color: #fff3cd;
+                color: #37352f;
+            }
+        """)
+        additional_layout.addWidget(self.additional_list)
+
+        # 追加答案のボタン
+        additional_btn_layout = QHBoxLayout()
+
+        self.select_all_btn = QPushButton("すべて選択")
+        self.select_all_btn.clicked.connect(self._select_all_additional)
+        additional_btn_layout.addWidget(self.select_all_btn)
+
+        self.grade_additional_btn = QPushButton("選択した答案を採点")
+        self.grade_additional_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f0ad4e;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #ec971f; }
+            QPushButton:disabled { background-color: #ccc; }
+        """)
+        self.grade_additional_btn.clicked.connect(self._on_grade_additional)
+        additional_btn_layout.addWidget(self.grade_additional_btn)
+
+        additional_btn_layout.addStretch()
+        additional_layout.addLayout(additional_btn_layout)
+
+        layout.addWidget(self.additional_group)
+
         layout.addStretch()
 
     def _on_file_selected(self, file_path: str):
@@ -242,14 +303,19 @@ class PdfLoaderPanel(QWidget):
         self.info_group.setVisible(False)
         self.prompt_group.setVisible(False)
         self.start_btn.setVisible(False)
+        self.additional_group.setVisible(False)
         self.progress_group.setVisible(True)
         self.progress_bar.setValue(0)
         self.status_label.setText("処理開始...")
+
+        # 追加答案リストをクリア
+        self._additional_items = []
 
         # ワーカー開始
         self._pipeline_worker = PipelineWorker(self._current_pdf_path)
         self._pipeline_worker.progress.connect(self._on_progress)
         self._pipeline_worker.students_found.connect(self._on_students_found)
+        self._pipeline_worker.additional_answers_found.connect(self._on_additional_found)
         self._pipeline_worker.finished.connect(self._on_finished)
         self._pipeline_worker.error.connect(self._on_error)
         self._pipeline_worker.start()
@@ -354,15 +420,19 @@ class PdfLoaderPanel(QWidget):
         """リセット"""
         self._current_pdf_path = None
         self._detected_info = {}
+        self._additional_items = []
 
         self.drop_area.setVisible(True)
         self.info_group.setVisible(False)
         self.prompt_group.setVisible(False)
         self.progress_group.setVisible(False)
         self.start_btn.setVisible(False)
+        self.additional_group.setVisible(False)
 
         for label in self.info_labels.values():
             label.setText("-")
+
+        self.additional_list.clear()
 
     def open_pdf_dialog(self):
         """PDFファイル選択ダイアログを開く"""
@@ -374,3 +444,78 @@ class PdfLoaderPanel(QWidget):
         )
         if file_path:
             self._on_file_selected(file_path)
+
+    def _on_additional_found(self, count: int):
+        """追加答案検出時"""
+        if self._pipeline_worker:
+            self._additional_items = self._pipeline_worker.additional_items
+        self._update_additional_list()
+
+    def _update_additional_list(self):
+        """追加答案リストを更新"""
+        self.additional_list.clear()
+
+        if not self._additional_items:
+            self.additional_group.setVisible(False)
+            return
+
+        self.additional_group.setVisible(True)
+        self.additional_header.setText(
+            f"異なる週の答案が {len(self._additional_items)} 件検出されました"
+        )
+
+        for item in self._additional_items:
+            text = f"第{item.target_week:02d}週 - {item.student_name} (出席番号{item.attendance_no})"
+            list_item = QListWidgetItem(text)
+            list_item.setData(Qt.ItemDataRole.UserRole, item)
+            self.additional_list.addItem(list_item)
+
+    def _select_all_additional(self):
+        """すべての追加答案を選択"""
+        for i in range(self.additional_list.count()):
+            self.additional_list.item(i).setSelected(True)
+
+    def _on_grade_additional(self):
+        """選択した追加答案を採点"""
+        selected_items = []
+        for i in range(self.additional_list.count()):
+            item = self.additional_list.item(i)
+            if item.isSelected():
+                additional_item = item.data(Qt.ItemDataRole.UserRole)
+                selected_items.append(additional_item)
+
+        if not selected_items:
+            QMessageBox.information(self, "追加答案", "採点する答案を選択してください")
+            return
+
+        self.additional_grading_requested.emit(selected_items)
+
+    def load_additional_answers(self):
+        """保存済みの追加答案を読み込み"""
+        current = Config.get_current_week()
+        if not current:
+            return
+
+        try:
+            year_dir = Config.APP_DATA_DIR / f"{current.get('year')}年度"
+            all_items = AdditionalAnswerManager.list_all_additional_answers(year_dir)
+
+            # AdditionalAnswerItem に変換
+            self._additional_items = []
+            for item_data in all_items:
+                if not item_data.get("graded", False):
+                    item = AdditionalAnswerItem(
+                        filename=item_data["filename"],
+                        student_name=item_data["student_name"],
+                        attendance_no=item_data["attendance_no"],
+                        class_name=item_data.get("class_name", ""),
+                        target_week=item_data["target_week"],
+                        target_term=item_data["target_term"],
+                        qr_data=item_data.get("qr_data", ""),
+                        graded=item_data.get("graded", False),
+                    )
+                    self._additional_items.append(item)
+
+            self._update_additional_list()
+        except Exception:
+            pass
