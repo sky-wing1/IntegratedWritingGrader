@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QScrollArea, QPushButton, QSpinBox
 )
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage
 
 try:
@@ -130,54 +130,125 @@ class PDFPreviewWidget(QWidget):
 
     def _update_buttons(self):
         """ボタン状態更新"""
-        has_pdf = self._pdf_doc is not None
-        page_count = len(self._pdf_doc) if has_pdf else 0
+        page_count = self._get_page_count()
+        has_content = page_count > 0
 
-        self.prev_btn.setEnabled(has_pdf and self._current_page > 0)
-        self.next_btn.setEnabled(has_pdf and self._current_page < page_count - 1)
+        self.prev_btn.setEnabled(has_content and self._current_page > 0)
+        self.next_btn.setEnabled(has_content and self._current_page < page_count - 1)
         self.zoom_label.setText(f"{int(self._zoom * 100)}%")
+
+    def _get_page_count(self) -> int:
+        """総ページ数を取得"""
+        if self._pdf_doc:
+            return len(self._pdf_doc)
+        if hasattr(self, '_image_paths') and self._image_paths:
+            return len(self._image_paths)
+        return 0
+
+    def _is_image_mode(self) -> bool:
+        """画像モードかどうか"""
+        return self._pdf_doc is None and hasattr(self, '_image_paths') and self._image_paths
 
     def _prev_page(self):
         """前ページ"""
         if self._current_page > 0:
             self._current_page -= 1
             self.page_spin.setValue(self._current_page + 1)
-            self._render_page()
+            self._render_current()
 
     def _next_page(self):
         """次ページ"""
-        if self._pdf_doc and self._current_page < len(self._pdf_doc) - 1:
+        page_count = self._get_page_count()
+        if self._current_page < page_count - 1:
             self._current_page += 1
             self.page_spin.setValue(self._current_page + 1)
-            self._render_page()
+            self._render_current()
 
     def _goto_page(self, page_num: int):
         """指定ページへ（スピンボックスから）"""
-        if self._pdf_doc and 1 <= page_num <= len(self._pdf_doc):
+        page_count = self._get_page_count()
+        if 1 <= page_num <= page_count:
             self._current_page = page_num - 1
-            self._render_page()
+            self._render_current()
             self.page_changed.emit(page_num)
 
     def set_page(self, page_num: int):
         """外部からページを設定（シグナル発火なし、無限ループ防止）"""
-        if self._pdf_doc and 1 <= page_num <= len(self._pdf_doc):
+        page_count = self._get_page_count()
+        if 1 <= page_num <= page_count:
             self._current_page = page_num - 1
             self.page_spin.blockSignals(True)
             self.page_spin.setValue(page_num)
             self.page_spin.blockSignals(False)
+            self._render_current()
+
+    def _render_current(self):
+        """現在のページ/画像をレンダリング"""
+        if self._is_image_mode():
+            self._render_image()
+        elif self._pdf_doc:
             self._render_page()
 
     def _zoom_in(self):
         """ズームイン"""
         if self._zoom < 3.0:
             self._zoom += 0.25
-            self._render_page()
+            self._render_current()
 
     def _zoom_out(self):
         """ズームアウト"""
         if self._zoom > 0.25:
             self._zoom -= 0.25
-            self._render_page()
+            self._render_current()
+
+    def load_images(self, image_paths: list):
+        """複数画像を読み込み（croppedフォルダ用）"""
+        self._pdf_doc = None
+        self._image_paths = [Path(p) for p in image_paths]
+        self._current_page = 0
+
+        if not self._image_paths:
+            self.image_label.setText("画像がありません")
+            return
+
+        self.page_spin.setMaximum(len(self._image_paths))
+        self.page_spin.setValue(1)
+        self.page_label.setText(f"/ {len(self._image_paths)}")
+        self._render_image()
+
+    def load_image(self, image_path: str):
+        """単一画像を読み込んで表示（追加答案モード用）"""
+        self.load_images([image_path])
+
+    def _render_image(self):
+        """現在の画像をレンダリング"""
+        if not hasattr(self, '_image_paths') or not self._image_paths:
+            return
+
+        if self._current_page >= len(self._image_paths):
+            return
+
+        path = self._image_paths[self._current_page]
+        if not path.exists():
+            self.image_label.setText(f"画像が見つかりません:\n{path}")
+            return
+
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            self.image_label.setText(f"画像の読み込みに失敗:\n{path}")
+            return
+
+        # ズームを適用してスケーリング
+        scaled_width = int(pixmap.width() * self._zoom)
+        scaled_height = int(pixmap.height() * self._zoom)
+        scaled = pixmap.scaled(
+            scaled_width,
+            scaled_height,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self.image_label.setPixmap(scaled)
+        self._update_buttons()
 
     @property
     def current_page(self) -> int:

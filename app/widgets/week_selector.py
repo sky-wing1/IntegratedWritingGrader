@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QPushButton, QFileDialog, QGroupBox,
     QTextEdit, QSpinBox, QProgressBar, QMessageBox
 )
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal
 
 from app.utils.config import Config
 from app.workers.pipeline_worker import PipelineWorker

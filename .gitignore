@@ -34,3 +34,4 @@ build/
 build/
 dist/
 *.spec.bak
+.eggs/

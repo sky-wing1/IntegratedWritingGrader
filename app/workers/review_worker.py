@@ -1,13 +1,11 @@
 """講評生成ワーカー"""
 
 from __future__ import annotations
-import json
 import subprocess
 from pathlib import Path
 from typing import List, Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from app.utils.config import Config
 from app.workers.grading_worker import _find_claude_command, _get_claude_env
 
 
@@ -113,6 +111,12 @@ REVIEW_PROMPT = r"""ここまで評価してきた答案についての講評を
 - \begin{enumerate}[\textbullet] で箇条書き
 - \Subsection*{} でセクション見出し
 - \br{.5} や \br{1} で適宜改行
+
+出力形式の注意：
+- 余計な前置き（「了解です」「完成しました」など）は絶対に追加しないでください
+- 必ず【プレーンテキスト版】から直接始めてください
+- ---SEPARATOR--- の後に必ず【LaTeX版】を出力してください
+- 出力の最後に要約やコメントを追加しないでください
 """
 
 
@@ -165,9 +169,22 @@ class ReviewWorker(QThread):
 
             # Claude Code CLI呼び出し（画像読み込み不要）
             claude_cmd = _find_claude_command()
+
+            # 余計な前置きや会話的応答を防ぐためのシステムプロンプト
+            system_prompt = (
+                "You are a professional essay reviewer. "
+                "Output EXACTLY what is requested in the prompt. "
+                "Do not add explanations, questions, commentary, or summaries "
+                "before or after the requested output. "
+                "Do not use casual language or emojis. "
+                "Follow the output format precisely. "
+                "Start directly with 【プレーンテキスト版】."
+            )
+
             cmd = [
                 claude_cmd,
                 "-p", full_prompt,
+                "--system-prompt", system_prompt,
             ]
 
             result = subprocess.run(
@@ -231,6 +248,13 @@ class ReviewWorker(QThread):
     def _split_output(self, text: str) -> tuple:
         """出力をプレーンテキストとLaTeXに分割"""
         separator = "---SEPARATOR---"
+        plain_marker = "【プレーンテキスト版】"
+        latex_marker = "【LaTeX版】"
+
+        # 前置き（「了解です」など）を除去
+        # 【プレーンテキスト版】より前の部分を削除
+        if plain_marker in text:
+            text = text[text.index(plain_marker):]
 
         if separator in text:
             parts = text.split(separator, 1)
@@ -238,10 +262,10 @@ class ReviewWorker(QThread):
             latex_text = parts[1].strip() if len(parts) > 1 else ""
 
             # 【プレーンテキスト版】と【LaTeX版】のヘッダーを除去
-            if "【プレーンテキスト版】" in plain_text:
-                plain_text = plain_text.replace("【プレーンテキスト版】", "").strip()
-            if "【LaTeX版】" in latex_text:
-                latex_text = latex_text.replace("【LaTeX版】", "").strip()
+            if plain_marker in plain_text:
+                plain_text = plain_text.replace(plain_marker, "").strip()
+            if latex_marker in latex_text:
+                latex_text = latex_text.replace(latex_marker, "").strip()
 
             # ```latex ... ``` を除去
             if "```latex" in latex_text:
@@ -249,7 +273,10 @@ class ReviewWorker(QThread):
 
             return plain_text, latex_text
         else:
-            # セパレーターがない場合は全部プレーンテキストとして扱う
+            # セパレーターがない場合
+            # 【プレーンテキスト版】マーカーを除去
+            if plain_marker in text:
+                text = text.replace(plain_marker, "").strip()
             return text, ""
 
     def cancel(self):

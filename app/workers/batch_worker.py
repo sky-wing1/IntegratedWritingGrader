@@ -5,7 +5,6 @@ from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from app.utils.config import Config
-from app.utils.qr_parser import find_dynamiks_output, parse_dynamiks_csv
 from app.workers.pipeline_worker import PipelineWorker
 
 
