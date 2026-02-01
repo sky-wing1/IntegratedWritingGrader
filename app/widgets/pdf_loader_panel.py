@@ -329,12 +329,20 @@ class PdfLoaderPanel(QWidget):
     def _on_students_found(self, students: list):
         """生徒情報検出"""
         if students:
-            first = students[0]
+            # 枚数が最も多い週を検出情報として使用
+            from collections import Counter
+            week_counts = Counter(
+                (s.get("year"), s.get("term"), s.get("week"), s.get("class_name"))
+                for s in students
+            )
+            most_common = week_counts.most_common(1)[0][0]
+            year, term, week, class_name = most_common
+
             self._detected_info = {
-                "year": first.get("year"),
-                "term": first.get("term"),
-                "week": first.get("week"),
-                "class_name": first.get("class_name"),
+                "year": year,
+                "term": term,
+                "week": week,
+                "class_name": class_name,
                 "page_count": len(students),
                 "students": students,
             }
