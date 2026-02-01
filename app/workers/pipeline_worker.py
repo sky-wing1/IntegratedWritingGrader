@@ -10,6 +10,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from app.utils.config import Config
 from app.utils.qr_parser import StudentInfo, parse_qr_value, find_scancrop_output, parse_scancrop_qrcode_txt
+from app.utils.additional_answer_manager import AdditionalAnswerManager, AdditionalAnswerItem
 
 
 class PipelineWorker(QThread):
@@ -18,6 +19,7 @@ class PipelineWorker(QThread):
     progress = pyqtSignal(int, int, str)  # current, total, message
     finished = pyqtSignal(str)  # 処理済みPDFパス
     students_found = pyqtSignal(list)  # 生徒情報リスト
+    additional_answers_found = pyqtSignal(int)  # 追加答案件数
     error = pyqtSignal(str)
 
     def __init__(self, input_pdf: str, parent=None):
@@ -25,6 +27,7 @@ class PipelineWorker(QThread):
         self.input_pdf = input_pdf
         self._is_cancelled = False
         self._students: List[StudentInfo] = []
+        self._additional_items: List[AdditionalAnswerItem] = []
 
     def run(self):
         """処理実行"""
@@ -126,19 +129,26 @@ class PipelineWorker(QThread):
             raise RuntimeError("scancrop処理がタイムアウトしました")
 
     def _crop_answers(self, pdf_path: str) -> Path:
-        """答案部分をクロップ（PyMuPDFで直接処理）"""
+        """答案部分をクロップ（PyMuPDFで直接処理）
+
+        追加答案（異なる週の答案）は別フォルダに分離する。
+        """
         try:
             import fitz  # PyMuPDF
         except ImportError:
             raise RuntimeError("PyMuPDFがインストールされていません")
 
-        # 出力先ディレクトリ（QRスキャン成功時は正式ディレクトリ、失敗時は一時ディレクトリ）
+        # 出力先ディレクトリ
         try:
             cropped_dir = Config.get_cropped_dir()
         except RuntimeError:
-            # 年度・学期・週が未設定の場合は一時ディレクトリを使用
             cropped_dir = self._temp_dir / "cropped"
         cropped_dir.mkdir(parents=True, exist_ok=True)
+
+        # 現在の週情報を取得
+        current = Config.get_current_week()
+        current_week = current.get("week") if current else None
+        current_term = current.get("term") if current else None
 
         # PDFを開く
         doc = fitz.open(pdf_path)
@@ -147,15 +157,27 @@ class PipelineWorker(QThread):
         def mm_to_pt(mm):
             return mm * 72 / 25.4
 
-        # 答案エリア: 左上原点で X=5mm, Y=112mm, W=175mm, H=140mm
-        # 【解答欄】ヘッダーから「○○ words)」まで含む
         crop_x = mm_to_pt(5)
         crop_y = mm_to_pt(112)
         crop_w = mm_to_pt(175)
         crop_h = mm_to_pt(140)
 
+        # 追加答案マネージャーのキャッシュ（週ごとに管理）
+        additional_managers: dict[tuple, AdditionalAnswerManager] = {}
+
         for page_num in range(len(doc)):
             page = doc[page_num]
+
+            # このページの生徒情報を取得
+            student_info = None
+            if page_num < len(self._students):
+                student_info = self._students[page_num]
+
+            # 追加答案かどうかチェック
+            is_additional = False
+            if student_info and current_week and current_term:
+                if student_info.week != current_week or student_info.term != current_term:
+                    is_additional = True
 
             # クロップ領域
             crop_rect = fitz.Rect(crop_x, crop_y, crop_x + crop_w, crop_y + crop_h)
@@ -164,10 +186,58 @@ class PipelineWorker(QThread):
             mat = fitz.Matrix(2, 2)  # 2倍のスケール
             pix = page.get_pixmap(matrix=mat, clip=crop_rect)
 
-            output_path = cropped_dir / f"page_{page_num + 1:03d}.png"
-            pix.save(str(output_path))
+            filename = f"page_{page_num + 1:03d}.png"
+
+            if is_additional and student_info:
+                # 追加答案として保存
+                target_key = (student_info.term, student_info.week)
+
+                if target_key not in additional_managers:
+                    # 該当週のディレクトリを取得/作成
+                    target_dir = Config.get_data_dir(
+                        year=student_info.year,
+                        term=student_info.term,
+                        week=student_info.week,
+                        class_name=student_info.class_name
+                    )
+                    manager = AdditionalAnswerManager(target_dir)
+                    manager.detected_from_week = current_week
+                    additional_managers[target_key] = manager
+
+                manager = additional_managers[target_key]
+
+                # 一時ファイルに保存してからコピー
+                temp_path = self._temp_dir / filename
+                pix.save(str(temp_path))
+                manager.save_image(temp_path, filename)
+
+                # アイテムを追加
+                item = AdditionalAnswerItem(
+                    filename=filename,
+                    student_name=student_info.name,
+                    attendance_no=student_info.attendance_no,
+                    class_name=student_info.class_name,
+                    target_week=student_info.week,
+                    target_term=student_info.term,
+                    qr_data=f"{student_info.year}_{student_info.term}_{student_info.week}_{student_info.class_name}_{student_info.attendance_no}_{student_info.name}",
+                )
+                manager.add_item(item)
+                self._additional_items.append(item)
+            else:
+                # 通常の答案として保存
+                output_path = cropped_dir / filename
+                pix.save(str(output_path))
 
         doc.close()
+
+        # 追加答案のメタデータを保存
+        for manager in additional_managers.values():
+            manager.save_metadata()
+
+        # 追加答案が見つかった場合はシグナル発火
+        if self._additional_items:
+            self.additional_answers_found.emit(len(self._additional_items))
+
         return cropped_dir
 
     def _parse_qr_codes(self, qrcode_txt: Optional[Path]):
@@ -217,6 +287,11 @@ class PipelineWorker(QThread):
     def students(self) -> List[StudentInfo]:
         """解析された生徒情報を取得"""
         return self._students
+
+    @property
+    def additional_items(self) -> List[AdditionalAnswerItem]:
+        """検出された追加答案を取得"""
+        return self._additional_items
 
     def cancel(self):
         """キャンセル"""
