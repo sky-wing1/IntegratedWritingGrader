@@ -259,8 +259,13 @@ class MainWindow(QMainWindow):
         # 採点基準を読み込み
         self._load_criteria()
 
-        # パネルに反映
-        self.integrated_panel.load_pdf(pdf_path)
+        # パネルに反映（cropped画像を読み込み）
+        try:
+            cropped_dir = Config.get_cropped_dir()
+            self.integrated_panel.load_cropped_images(cropped_dir)
+        except RuntimeError:
+            # フォールバック: PDFを直接読み込み
+            self.integrated_panel.load_pdf(pdf_path)
         self.integrated_panel.set_criteria(self._current_criteria)
         self.export_panel.set_criteria(self._current_criteria)
 

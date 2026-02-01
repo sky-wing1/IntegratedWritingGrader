@@ -146,8 +146,14 @@ class IntegratedGradingPanel(QWidget):
         layout.addWidget(splitter, 1)
 
     def load_pdf(self, pdf_path: str):
-        """PDF読み込み"""
+        """PDF読み込み（後方互換性用）"""
         self.pdf_preview.load_pdf(pdf_path)
+
+    def load_cropped_images(self, cropped_dir: Path):
+        """croppedフォルダの画像を読み込み"""
+        image_files = sorted(cropped_dir.glob("*.png"))
+        if image_files:
+            self.pdf_preview.load_images([str(f) for f in image_files])
 
     def set_criteria(self, criteria: GradingCriteria):
         """採点基準を設定"""
