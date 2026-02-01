@@ -253,15 +253,19 @@ class PipelineWorker(QThread):
                 self._students = find_scancrop_output(self._temp_dir)
 
         # 生徒情報があれば年度・クラス・学期・週を設定
+        # 枚数が最も多い週をメインとして設定
         if self._students:
-            first_student = self._students[0]
-            # 最初の生徒の情報から設定
-            Config.set_current_week(
-                first_student.year,
-                first_student.term,
-                first_student.week,
-                first_student.class_name
+            from collections import Counter
+            # (year, term, week, class_name) の組み合わせでカウント
+            week_counts = Counter(
+                (s.year, s.term, s.week, s.class_name)
+                for s in self._students
             )
+            # 最も枚数が多い週を取得
+            most_common = week_counts.most_common(1)[0][0]
+            year, term, week, class_name = most_common
+
+            Config.set_current_week(year, term, week, class_name)
 
     def _move_to_final_location(self, temp_pdf_path: str) -> str:
         """一時ファイルを正式な場所に移動"""
