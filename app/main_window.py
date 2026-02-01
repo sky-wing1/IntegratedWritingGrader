@@ -381,14 +381,39 @@ class MainWindow(QMainWindow):
 
     def _on_grading_finished(self, results: list):
         """採点完了"""
-        self.integrated_panel.progress_panel.set_complete()
+        # エラー結果をチェック
+        error_results = [r for r in results if r.get("error")]
+        total_count = len(results)
+        error_count = len(error_results)
+
+        if error_count == total_count and total_count > 0:
+            # すべてエラーの場合
+            first_error = error_results[0].get("error", "不明なエラー")
+            self.integrated_panel.progress_panel.set_error(first_error)
+            self.statusbar.showMessage(f"採点失敗: {first_error}")
+            QMessageBox.critical(self, "採点エラー", f"採点に失敗しました:\n{first_error}")
+            return
+
+        # 結果をセット（部分的成功でも表示）
         self.integrated_panel.set_results(results)
 
         # 出力パネルにもデータをセット
         if self._current_pdf_path:
             self.export_panel.set_data(self._current_pdf_path, results)
 
-        self.statusbar.showMessage(f"採点完了: {len(results)} ページ")
+        if error_count > 0:
+            # 一部エラーの場合は警告付きで完了
+            self.integrated_panel.progress_panel.set_complete()
+            self.statusbar.showMessage(f"採点完了（{error_count}件エラー）: {total_count} ページ")
+            QMessageBox.warning(
+                self, "一部エラー",
+                f"{total_count}件中{error_count}件の採点でエラーが発生しました。\n"
+                "詳細は各ページの結果を確認してください。"
+            )
+        else:
+            # すべて成功
+            self.integrated_panel.progress_panel.set_complete()
+            self.statusbar.showMessage(f"採点完了: {total_count} ページ")
         # 既に統合パネルにいるのでページ遷移は不要
 
     def _on_grading_error(self, error: str):
