@@ -30,6 +30,8 @@ def _find_claude_command() -> str:
     # 2. 一般的なインストール先を探す
     home = Path.home()
     common_paths = [
+        # Claude Code CLI (公式インストール先)
+        home / ".local/bin",
         # nvm経由のNode.js
         home / ".nvm/versions/node",
         # Homebrew
@@ -84,6 +86,7 @@ def _get_claude_env() -> dict:
 
     extra_paths = [
         p for p in [
+            str(home / ".local/bin"),  # Claude Code CLI
             nvm_bin_path,
             "/opt/homebrew/bin",
             "/usr/local/bin",
