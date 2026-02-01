@@ -286,3 +286,48 @@ def find_scancrop_output(work_dir: Path) -> list[StudentInfo]:
 def find_dynamiks_output(work_dir: Path) -> list[StudentInfo]:
     """作業ディレクトリ内の出力ファイルを検索してパース（後方互換性用）"""
     return find_scancrop_output(work_dir)
+
+
+def extract_week_info(qr_value: str) -> dict | None:
+    """QRコード値から週情報を抽出
+
+    Args:
+        qr_value: QRコードの値
+
+    Returns:
+        {"year": int, "term": str, "week": int, "class_name": str} or None
+    """
+    student = parse_qr_value(qr_value)
+    if not student:
+        return None
+
+    return {
+        "year": student.year,
+        "term": student.term,
+        "week": student.week,
+        "class_name": student.class_name,
+    }
+
+
+def is_different_week(
+    qr_value: str,
+    current_week: int,
+    current_term: str
+) -> bool:
+    """QRコードの週が現在の週と異なるかチェック
+
+    Args:
+        qr_value: QRコードの値
+        current_week: 現在処理中の週番号
+        current_term: 現在処理中の学期
+
+    Returns:
+        True: 異なる週の答案（追加答案）
+        False: 同じ週の答案、またはQRコードが無効
+    """
+    info = extract_week_info(qr_value)
+    if not info:
+        # QRコードが読めない場合は通常処理に含める
+        return False
+
+    return info["week"] != current_week or info["term"] != current_term
