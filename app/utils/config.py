@@ -120,6 +120,81 @@ class Config:
         return cropped_dir
 
     @classmethod
+    def get_additional_dir(
+        cls,
+        year: int | None = None,
+        term: str | None = None,
+        week: int | None = None,
+        class_name: str | None = None
+    ) -> Path:
+        """追加答案ディレクトリを取得"""
+        additional_dir = cls.get_data_dir(year, term, week, class_name) / "additional"
+        additional_dir.mkdir(parents=True, exist_ok=True)
+        return additional_dir
+
+    @classmethod
+    def get_additional_results_path(
+        cls,
+        year: int | None = None,
+        term: str | None = None,
+        week: int | None = None,
+        class_name: str | None = None
+    ) -> Path:
+        """追加答案の採点結果JSONのパスを取得"""
+        return cls.get_additional_dir(year, term, week, class_name) / "additional_results.json"
+
+    @classmethod
+    def save_additional_results(
+        cls,
+        results: list[dict],
+        year: int | None = None,
+        term: str | None = None,
+        week: int | None = None,
+        class_name: str | None = None
+    ):
+        """追加答案の採点結果を保存"""
+        results_path = cls.get_additional_results_path(year, term, week, class_name)
+
+        data = {
+            "year": year or cls._current_year,
+            "term": term or cls._current_term,
+            "week": week or cls._current_week,
+            "class_name": class_name or cls._current_class,
+            "saved_at": datetime.now().isoformat(),
+            "is_additional": True,
+            "results": results
+        }
+
+        with open(results_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        return results_path
+
+    @classmethod
+    def load_additional_results(
+        cls,
+        year: int | None = None,
+        term: str | None = None,
+        week: int | None = None,
+        class_name: str | None = None
+    ) -> list[dict] | None:
+        """追加答案の採点結果を読み込み"""
+        results_path = cls.get_additional_results_path(year, term, week, class_name)
+
+        if not results_path.exists():
+            return None
+
+        with open(results_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and "results" in data:
+            return data["results"]
+
+        return None
+
+    @classmethod
     def get_work_dir(cls) -> Path:
         """作業ディレクトリ（クロップ画像）- 後方互換性のため"""
         return cls.get_cropped_dir()
