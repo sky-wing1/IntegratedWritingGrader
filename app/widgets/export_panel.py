@@ -243,26 +243,35 @@ class ExportPanel(QWidget):
             # 選択されたフォントを使用
             font_path = self._get_selected_font()
 
+            # mm → pt 変換関数（ループ外で定義）
+            def mm_to_pt(mm):
+                return mm * 72 / 25.4
+
+            # 【採点欄】エリアの座標（ループ外で計算）
+            box_x = mm_to_pt(186.7)
+            box_y = mm_to_pt(91.8)  # 86.8→91.8に変更（5mm下にずらす）
+            box_w = mm_to_pt(162.3)
+            box_h = mm_to_pt(115)
+
+            # 失敗したページを追跡
+            failed_pages = []
+            skipped_pages = []
+
             for i, result in enumerate(self._results):
                 page_num = result.get("page", i + 1) - 1
                 if page_num < 0 or page_num >= len(doc):
+                    skipped_pages.append(page_num + 1)
                     continue
 
                 page = doc[page_num]
-                page_rect = page.rect
 
                 # 注釈テキスト作成
                 annot_text = self._format_annotation(result)
 
-                # 【採点欄】エリアに配置
-                # 座標: 左上原点で X=186.7mm, Y=86.8mm, W=162.3mm, H=115mm
-                def mm_to_pt(mm):
-                    return mm * 72 / 25.4
-
-                box_x = mm_to_pt(186.7)
-                box_y = mm_to_pt(86.8)
-                box_w = mm_to_pt(162.3)
-                box_h = mm_to_pt(115)
+                # 注釈テキストが空の場合はスキップ
+                if not annot_text.strip():
+                    skipped_pages.append(page_num + 1)
+                    continue
 
                 rect = fitz.Rect(
                     box_x,
@@ -276,23 +285,29 @@ class ExportPanel(QWidget):
                 color = self._get_selected_color()
 
                 # 日本語フォントでテキスト挿入
-                if font_path:
-                    page.insert_textbox(
-                        rect,
-                        annot_text,
-                        fontsize=font_size,
-                        fontfile=font_path,
-                        fontname="F0",
-                        color=color,
-                    )
-                else:
-                    # フォールバック：注釈として追加
-                    annot = page.add_freetext_annot(
-                        rect,
-                        annot_text,
-                        fontsize=font_size,
-                        text_color=color,
-                    )
+                try:
+                    if font_path:
+                        rc = page.insert_textbox(
+                            rect,
+                            annot_text,
+                            fontsize=font_size,
+                            fontfile=font_path,
+                            fontname="F0",
+                            color=color,
+                        )
+                        # insert_textboxの戻り値が負の場合、テキストがrectに収まらなかった
+                        if rc < 0:
+                            failed_pages.append((page_num + 1, "テキストがボックスに収まりません"))
+                    else:
+                        # フォールバック：注釈として追加
+                        page.add_freetext_annot(
+                            rect,
+                            annot_text,
+                            fontsize=font_size,
+                            text_color=color,
+                        )
+                except Exception as page_error:
+                    failed_pages.append((page_num + 1, str(page_error)))
 
                 # スタンプを追加
                 if self.include_stamp.isChecked():
@@ -305,7 +320,16 @@ class ExportPanel(QWidget):
             doc.save(file_path)
             doc.close()
 
-            self.preview_text.setText(f"出力完了: {file_path}")
+            # 結果メッセージを構築
+            result_msg = f"出力完了: {file_path}"
+            if failed_pages:
+                result_msg += f"\n\n⚠️ 以下のページで注釈の挿入に問題がありました:\n"
+                for page, reason in failed_pages:
+                    result_msg += f"  - ページ {page}: {reason}\n"
+            if skipped_pages:
+                result_msg += f"\n⚠️ スキップされたページ: {skipped_pages}"
+
+            self.preview_text.setText(result_msg)
             self.export_complete.emit(file_path)
 
         except Exception as e:
