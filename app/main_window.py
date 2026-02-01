@@ -23,6 +23,7 @@ from app.workers.pipeline_worker import PipelineWorker
 from app.workers.grading_worker import GradingWorker, load_results_from_json
 from app.utils.config import Config
 from app.utils.criteria_parser import parse_criteria_from_prompt, GradingCriteria, _default_criteria
+from app.utils.additional_answer_manager import AdditionalAnswerItem
 from app import __version__
 
 
@@ -148,6 +149,7 @@ class MainWindow(QMainWindow):
         # PDF読み込みページ（QRコードから自動判定）
         self.pdf_loader = PdfLoaderPanel()
         self.pdf_loader.pdf_loaded.connect(self._on_pdf_loaded_with_info)
+        self.pdf_loader.additional_grading_requested.connect(self._on_additional_grading_requested)
         self.content_stack.addWidget(self.pdf_loader)
 
         # 採点・編集ページ（統合パネル）
@@ -558,3 +560,57 @@ class MainWindow(QMainWindow):
                 )
         else:
             self.statusbar.showMessage("採点結果の読み込みに失敗しました")
+
+    def _on_additional_grading_requested(self, items: list):
+        """追加答案の採点リクエスト"""
+        if not items:
+            return
+
+        # 最初のアイテムの週情報を使用
+        first_item = items[0]
+
+        # 現在の週情報を取得
+        current = Config.get_current_week()
+        if not current:
+            QMessageBox.warning(self, "追加答案", "週が選択されていません")
+            return
+
+        year = current.get("year")
+        target_dir = Config.get_data_dir(
+            year=year,
+            term=first_item.target_term,
+            week=first_item.target_week,
+            class_name=first_item.class_name
+        )
+
+        additional_dir = target_dir / "additional"
+
+        if not additional_dir.exists():
+            QMessageBox.warning(
+                self, "追加答案",
+                f"追加答案フォルダが見つかりません:\n{additional_dir}"
+            )
+            return
+
+        # 週を一時的に切り替え
+        Config.set_current_week(
+            year=year,
+            term=first_item.target_term,
+            week=first_item.target_week,
+            class_name=first_item.class_name
+        )
+
+        # 採点基準を読み込み
+        self._load_criteria()
+
+        # 追加答案モードで採点・編集パネルに遷移
+        self.integrated_panel.set_criteria(self._current_criteria)
+        self.integrated_panel.load_additional_answers(additional_dir, items)
+
+        # ステータスバー更新
+        self.statusbar.showMessage(
+            f"追加答案モード: 第{first_item.target_week}週 ({len(items)}件)"
+        )
+
+        # 採点・編集ページに移動
+        self.nav_list.setCurrentRow(1)

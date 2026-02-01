@@ -383,6 +383,16 @@ class PdfLoaderPanel(QWidget):
                 "手動で設定するか、PDFを確認してください。"
             )
 
+        # 追加答案の通知
+        if self._additional_items:
+            count = len(self._additional_items)
+            QMessageBox.information(
+                self,
+                "追加答案を検出",
+                f"{count} 件の追加答案（異なる週の答案）を検出しました。\n\n"
+                "「追加答案」セクションから採点できます。"
+            )
+
     def _on_error(self, error: str):
         """エラー"""
         self.progress_group.setVisible(False)
