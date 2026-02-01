@@ -179,6 +179,40 @@ class PDFPreviewWidget(QWidget):
             self._zoom -= 0.25
             self._render_page()
 
+    def load_image(self, image_path: str):
+        """画像を読み込んで表示（追加答案モード用）"""
+        path = Path(image_path)
+        if not path.exists():
+            self.image_label.setText(f"画像が見つかりません:\n{path}")
+            return
+
+        # PDFモードを解除
+        self._pdf_doc = None
+        self._current_page = 0
+
+        # 画像を読み込み
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            self.image_label.setText(f"画像の読み込みに失敗:\n{path}")
+            return
+
+        # ズームを適用してスケーリング
+        scaled_width = int(pixmap.width() * self._zoom)
+        scaled_height = int(pixmap.height() * self._zoom)
+        scaled = pixmap.scaled(
+            scaled_width,
+            scaled_height,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self.image_label.setPixmap(scaled)
+
+        # ページ情報更新（画像モード）
+        self.page_spin.setMaximum(1)
+        self.page_spin.setValue(1)
+        self.page_label.setText("画像モード")
+        self._update_buttons()
+
     @property
     def current_page(self) -> int:
         """現在のページ番号（1始まり）"""

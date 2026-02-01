@@ -1,9 +1,10 @@
 """統合採点・編集パネル"""
 
 from __future__ import annotations
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QListWidget, QListWidgetItem, QLabel
+    QListWidget, QListWidgetItem, QLabel, QPushButton
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
@@ -11,6 +12,7 @@ from app.widgets.pdf_preview import PDFPreviewWidget
 from app.widgets.feedback_editor import FeedbackEditorWidget
 from app.widgets.progress_panel import ProgressPanel
 from app.utils.criteria_parser import GradingCriteria
+from app.utils.additional_answer_manager import AdditionalAnswerItem
 
 
 class IntegratedGradingPanel(QWidget):
@@ -26,6 +28,9 @@ class IntegratedGradingPanel(QWidget):
         super().__init__()
         self._results: list[dict] = []
         self._current_index = -1
+        self._is_additional_mode = False
+        self._additional_items: list[AdditionalAnswerItem] = []
+        self._additional_dir: Path | None = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -33,6 +38,40 @@ class IntegratedGradingPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+
+        # 追加答案モードヘッダー
+        self.additional_header = QWidget()
+        self.additional_header.setStyleSheet("""
+            QWidget {
+                background-color: #fff3cd;
+                border-bottom: 1px solid #ffc107;
+            }
+        """)
+        self.additional_header.setVisible(False)
+        header_layout = QHBoxLayout(self.additional_header)
+        header_layout.setContentsMargins(16, 8, 16, 8)
+
+        self.additional_label = QLabel("追加答案モード")
+        self.additional_label.setStyleSheet("font-weight: bold; color: #856404;")
+        header_layout.addWidget(self.additional_label)
+
+        header_layout.addStretch()
+
+        self.exit_additional_btn = QPushButton("通常モードに戻る")
+        self.exit_additional_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #856404;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 4px 12px;
+            }
+            QPushButton:hover { background-color: #6c5303; }
+        """)
+        self.exit_additional_btn.clicked.connect(self._exit_additional_mode)
+        header_layout.addWidget(self.exit_additional_btn)
+
+        layout.addWidget(self.additional_header)
 
         # 上部: 進捗パネル
         self.progress_panel = ProgressPanel()
@@ -158,8 +197,13 @@ class IntegratedGradingPanel(QWidget):
 
         # PDFプレビューを同期（必要な場合）
         if sync_pdf:
-            page_num = result.get("page", index + 1)
-            self.pdf_preview.set_page(page_num)
+            if self._is_additional_mode and result.get("image_path"):
+                # 追加答案モード: 画像を表示
+                self.pdf_preview.load_image(result["image_path"])
+            else:
+                # 通常モード: PDFページを表示
+                page_num = result.get("page", index + 1)
+                self.pdf_preview.set_page(page_num)
 
         # リスト選択を同期
         self.page_list.blockSignals(True)
@@ -234,3 +278,57 @@ class IntegratedGradingPanel(QWidget):
                     item.setForeground(Qt.GlobalColor.darkYellow)
                 else:
                     item.setForeground(Qt.GlobalColor.red)
+
+    def load_additional_answers(self, additional_dir: Path, items: list):
+        """追加答案を読み込み"""
+        self._is_additional_mode = True
+        self._additional_items = items
+        self._additional_dir = Path(additional_dir)
+
+        # ヘッダーを表示
+        self.additional_header.setVisible(True)
+        first_item = items[0] if items else None
+        if first_item:
+            self.additional_label.setText(
+                f"追加答案モード - 第{first_item.target_week:02d}週 ({len(items)}件)"
+            )
+
+        # 結果リストを初期化（画像パスを設定）
+        self._results = []
+        for i, item in enumerate(items):
+            image_path = self._additional_dir / item.filename
+            self._results.append({
+                "page": i + 1,
+                "student_name": item.student_name,
+                "attendance_no": item.attendance_no,
+                "image_path": str(image_path),
+                "total_score": None,
+                "content_score": None,
+                "expression_deduction": None,
+                "content_comment": "",
+                "expression_comment": "",
+                "corrected_text": "",
+                "revision_points": "",
+            })
+
+        self._update_page_list()
+        if self._results:
+            self._select_page(0)
+
+    def _exit_additional_mode(self):
+        """追加答案モードを終了"""
+        self._is_additional_mode = False
+        self._additional_items = []
+        self._additional_dir = None
+        self.additional_header.setVisible(False)
+        self._results = []
+        self._update_page_list()
+        self.feedback_editor.clear()
+
+    def is_additional_mode(self) -> bool:
+        """追加答案モードかどうか"""
+        return self._is_additional_mode
+
+    def get_additional_dir(self) -> Path | None:
+        """追加答案ディレクトリを取得"""
+        return self._additional_dir
