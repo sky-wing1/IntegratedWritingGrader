@@ -294,20 +294,48 @@ class ExportPanel(QWidget):
                 font_size = self.font_size_spin.value()
                 color = self._get_selected_color()
 
-                # 日本語フォントでテキスト挿入
+                # 日本語フォントでテキスト挿入（自動フォントサイズ縮小対応）
                 try:
                     if font_path:
-                        rc = page.insert_textbox(
-                            rect,
-                            annot_text,
-                            fontsize=font_size,
-                            fontfile=font_path,
-                            fontname="F0",
-                            color=color,
-                        )
-                        # insert_textboxの戻り値が負の場合、テキストがrectに収まらなかった
-                        if rc < 0:
-                            failed_pages.append((page_num + 1, "テキストがボックスに収まりません"))
+                        # 最小フォントサイズ
+                        min_font_size = 4
+                        current_font_size = font_size
+                        font_adjusted = False
+
+                        # TextWriterを使って収まるフォントサイズを探す
+                        font_obj = fitz.Font(fontfile=font_path)
+
+                        while current_font_size >= min_font_size:
+                            tw = fitz.TextWriter(page.rect)
+                            # fill_textboxは収まらない場合に残りテキストを返す
+                            excess = tw.fill_textbox(
+                                rect,
+                                annot_text,
+                                font=font_obj,
+                                fontsize=current_font_size,
+                            )
+                            if not excess:
+                                # 収まった場合、実際に描画
+                                tw.write_text(page, color=color)
+                                if current_font_size < font_size:
+                                    font_adjusted = True
+                                break
+                            current_font_size -= 1
+                        else:
+                            # 最小サイズでも収まらなかった場合、最小サイズで描画
+                            tw = fitz.TextWriter(page.rect)
+                            tw.fill_textbox(
+                                rect,
+                                annot_text,
+                                font=font_obj,
+                                fontsize=min_font_size,
+                            )
+                            tw.write_text(page, color=color)
+                            failed_pages.append((page_num + 1, f"テキストが長すぎます（{min_font_size}ptでも一部切れています）"))
+
+                        # フォントサイズ縮小の通知
+                        if font_adjusted:
+                            failed_pages.append((page_num + 1, f"フォントサイズを{font_size}pt→{current_font_size}ptに縮小"))
                     else:
                         # フォールバック：注釈として追加
                         page.add_freetext_annot(
