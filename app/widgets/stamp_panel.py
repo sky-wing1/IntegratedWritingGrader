@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import (
     QSpinBox, QListWidget, QListWidgetItem, QSplitter,
     QMessageBox, QScrollArea, QGridLayout, QCheckBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize
-from PyQt6.QtGui import QPixmap, QIcon
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QPixmap
 
 from app.utils.config import Config
 

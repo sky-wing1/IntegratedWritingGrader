@@ -3,9 +3,8 @@
 from __future__ import annotations
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional
 import csv
-import re
 
 
 @dataclass

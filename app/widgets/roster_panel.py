@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QComboBox, QDialog, QFormLayout,
     QDialogButtonBox, QSpinBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 
 from app.utils.roster_manager import (
     ClassRoster, Student, parse_roster_file,

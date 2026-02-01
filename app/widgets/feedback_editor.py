@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
-from app.utils.criteria_parser import GradingCriteria, Criterion, _default_criteria
+from app.utils.criteria_parser import GradingCriteria, _default_criteria
 
 
 class FeedbackEditorWidget(QWidget):

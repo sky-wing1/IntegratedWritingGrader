@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QGroupBox, QPushButton, QFileDialog, QTextEdit,
     QCheckBox, QProgressBar, QSpinBox, QComboBox
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 
 from app.utils.config import Config
 from app.utils.criteria_parser import GradingCriteria, _default_criteria

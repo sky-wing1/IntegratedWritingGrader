@@ -7,12 +7,10 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QGroupBox, QPushButton, QFileDialog, QTableWidget,
     QTableWidgetItem, QHeaderView, QProgressBar,
-    QMessageBox, QCheckBox, QComboBox, QAbstractItemView
+    QMessageBox, QCheckBox, QAbstractItemView
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QColor
-
-from app.utils.config import Config
 
 
 @dataclass

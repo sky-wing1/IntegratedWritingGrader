@@ -5,7 +5,7 @@ import subprocess
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QStackedWidget, QListWidget, QListWidgetItem,
-    QLabel, QStatusBar, QMessageBox, QFileDialog,
+    QLabel, QStatusBar, QMessageBox,
     QDialog, QDialogButtonBox
 )
 from PyQt6.QtCore import Qt, QSize

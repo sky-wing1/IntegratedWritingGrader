@@ -1,13 +1,11 @@
 """講評生成ワーカー"""
 
 from __future__ import annotations
-import json
 import subprocess
 from pathlib import Path
 from typing import List, Optional
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from app.utils.config import Config
 from app.workers.grading_worker import _find_claude_command, _get_claude_env
 
 

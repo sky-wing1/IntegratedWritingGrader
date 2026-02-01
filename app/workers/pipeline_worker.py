@@ -9,7 +9,7 @@ from typing import Optional, Tuple, List
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from app.utils.config import Config
-from app.utils.qr_parser import StudentInfo, parse_qr_value, find_scancrop_output, parse_scancrop_qrcode_txt
+from app.utils.qr_parser import StudentInfo, find_scancrop_output, parse_scancrop_qrcode_txt
 from app.utils.additional_answer_manager import AdditionalAnswerManager, AdditionalAnswerItem
 
 
