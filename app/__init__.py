@@ -1,3 +1,3 @@
 """IntegratedWritingGrader - 英作文採点アプリ"""
 
-__version__ = "1.4.3"
+__version__ = "1.4.4"

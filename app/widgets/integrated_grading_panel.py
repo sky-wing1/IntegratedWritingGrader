@@ -207,8 +207,10 @@ class IntegratedGradingPanel(QWidget):
         self._current_index = index
         result = self._results[index]
 
-        # フィードバック編集パネルを更新
-        self.feedback_editor.set_data(result)
+        # フィードバック編集パネルを更新（表示用ページ番号を追加）
+        display_result = result.copy()
+        display_result["display_page"] = index + 1  # 連番で表示
+        self.feedback_editor.set_data(display_result)
 
         # PDFプレビューを同期（必要な場合）
         if sync_pdf:
@@ -244,12 +246,13 @@ class IntegratedGradingPanel(QWidget):
         """ページリスト更新"""
         self.page_list.clear()
         for i, result in enumerate(self._results):
-            page_num = result.get("page", i + 1)
+            # 連番で表示（インデックス+1）
+            display_num = i + 1
             score = result.get("total_score")
             score_text = f"{score}点" if score is not None else "未採点"
             student = result.get("student_name", "")
 
-            item_text = f"P{page_num}: {score_text}"
+            item_text = f"P{display_num}: {score_text}"
             if student:
                 item_text += f" ({student})"
 
@@ -272,12 +275,13 @@ class IntegratedGradingPanel(QWidget):
             return
 
         result = self._results[index]
-        page_num = result.get("page", index + 1)
+        # 連番で表示（インデックス+1）
+        display_num = index + 1
         score = result.get("total_score")
         score_text = f"{score}点" if score is not None else "未採点"
         student = result.get("student_name", "")
 
-        item_text = f"P{page_num}: {score_text}"
+        item_text = f"P{display_num}: {score_text}"
         if student:
             item_text += f" ({student})"
 

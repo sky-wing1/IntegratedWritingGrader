@@ -200,8 +200,8 @@ class FeedbackEditorWidget(QWidget):
         """採点データをセット"""
         self._current_data = result.copy()
 
-        # ページヘッダー更新
-        page_num = result.get("page", "?")
+        # ページヘッダー更新（display_pageがあれば優先）
+        page_num = result.get("display_page", result.get("page", "?"))
         student = result.get("student_name", "")
         header_text = f"ページ {page_num}"
         if student:
