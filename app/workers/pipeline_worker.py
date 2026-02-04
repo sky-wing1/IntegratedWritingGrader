@@ -189,29 +189,30 @@ class PipelineWorker(QThread):
             filename = f"page_{page_num + 1:03d}.png"
 
             if is_additional and student_info:
-                # 追加答案として保存
-                target_key = (student_info.term, student_info.week)
+                # 追加答案として保存（検出元週のadditionalフォルダに保存）
+                # キーは検出元週（current）で統一
+                source_key = (current_term, current_week)
 
-                if target_key not in additional_managers:
-                    # 該当週のディレクトリを取得/作成
-                    target_dir = Config.get_data_dir(
+                if source_key not in additional_managers:
+                    # 検出元週（現在処理中の週）のディレクトリを取得/作成
+                    source_dir = Config.get_data_dir(
                         year=student_info.year,
-                        term=student_info.term,
-                        week=student_info.week,
+                        term=current_term,
+                        week=current_week,
                         class_name=student_info.class_name
                     )
-                    manager = AdditionalAnswerManager(target_dir)
+                    manager = AdditionalAnswerManager(source_dir)
                     manager.detected_from_week = current_week
-                    additional_managers[target_key] = manager
+                    additional_managers[source_key] = manager
 
-                manager = additional_managers[target_key]
+                manager = additional_managers[source_key]
 
                 # 一時ファイルに保存してからコピー
                 temp_path = self._temp_dir / filename
                 pix.save(str(temp_path))
                 manager.save_image(temp_path, filename)
 
-                # アイテムを追加
+                # アイテムを追加（元PDFでのページ番号を記録）
                 item = AdditionalAnswerItem(
                     filename=filename,
                     student_name=student_info.name,
@@ -220,6 +221,7 @@ class PipelineWorker(QThread):
                     target_week=student_info.week,
                     target_term=student_info.term,
                     qr_data=f"{student_info.year}_{student_info.term}_{student_info.week}_{student_info.class_name}_{student_info.attendance_no}_{student_info.name}",
+                    original_page=page_num + 1,  # 1-indexed
                 )
                 manager.add_item(item)
                 self._additional_items.append(item)

@@ -21,6 +21,7 @@ class AdditionalAnswerItem:
     target_term: str        # 本来の学期
     qr_data: str            # QRコード生データ
     graded: bool = False    # 採点済みフラグ
+    original_page: int = 0  # 元PDFでのページ番号（1-indexed）
 
     def to_dict(self) -> dict:
         """辞書形式に変換"""
@@ -33,6 +34,7 @@ class AdditionalAnswerItem:
             "target_term": self.target_term,
             "qr_data": self.qr_data,
             "graded": self.graded,
+            "original_page": self.original_page,
         }
 
     @classmethod
@@ -47,6 +49,7 @@ class AdditionalAnswerItem:
             target_term=d["target_term"],
             qr_data=d.get("qr_data", ""),
             graded=d.get("graded", False),
+            original_page=d.get("original_page", 0),
         )
 
 

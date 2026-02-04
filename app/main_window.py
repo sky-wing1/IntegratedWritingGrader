@@ -1,6 +1,7 @@
 """メインウィンドウ"""
 
 from __future__ import annotations
+import json
 import subprocess
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -160,6 +161,7 @@ class MainWindow(QMainWindow):
         self.integrated_panel.progress_panel.json_imported.connect(self._on_json_imported)
         self.integrated_panel.progress_panel.save_requested.connect(self._on_save_requested)
         self.integrated_panel.progress_panel.load_saved_requested.connect(self._on_load_saved_requested)
+        self.integrated_panel.exit_additional_mode_requested.connect(self._on_exit_additional_mode)
         self.content_stack.addWidget(self.integrated_panel)
 
         # 出力ページ
@@ -342,13 +344,36 @@ class MainWindow(QMainWindow):
     def _on_grading_started(self, method: str):
         """採点開始（パネルから）"""
         if method == "cli":
-            if not self._current_pdf_path:
-                QMessageBox.warning(self, "採点", "まずPDFを読み込んでください")
-                self.integrated_panel.progress_panel.stop_grading()
-                return
+            # 追加答案モードの場合
+            if self.integrated_panel.is_additional_mode():
+                additional_dir = self.integrated_panel.get_additional_dir()
+                if not additional_dir or not additional_dir.exists():
+                    QMessageBox.warning(self, "採点", "追加答案フォルダが見つかりません")
+                    self.integrated_panel.progress_panel.stop_grading()
+                    return
 
-            # 採点ワーカー開始
-            self._grading_worker = GradingWorker(self._current_pdf_path)
+                # 追加答案の画像ファイルを取得
+                image_files = sorted(additional_dir.glob("*.png"))
+                if not image_files:
+                    QMessageBox.warning(self, "採点", "追加答案の画像が見つかりません")
+                    self.integrated_panel.progress_panel.stop_grading()
+                    return
+
+                # 追加答案専用のワーカーを開始
+                self._grading_worker = GradingWorker(
+                    pdf_path="",  # 追加答案モードではPDFパス不要
+                    image_files=image_files
+                )
+            else:
+                # 通常モード
+                if not self._current_pdf_path:
+                    QMessageBox.warning(self, "採点", "まずPDFを読み込んでください")
+                    self.integrated_panel.progress_panel.stop_grading()
+                    return
+
+                self._grading_worker = GradingWorker(self._current_pdf_path)
+
+            # 共通のシグナル接続
             self._grading_worker.progress.connect(self._on_grading_progress)
             self._grading_worker.result_ready.connect(self._on_result_ready)
             self._grading_worker.finished.connect(self._on_grading_finished)
@@ -460,9 +485,22 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            saved_path = Config.save_results(results)
-            self.integrated_panel.progress_panel.set_saved(str(saved_path))
-            self.statusbar.showMessage(f"保存完了: {saved_path}")
+            # 追加答案モードの場合は additional_results.json に保存
+            if self.integrated_panel.is_additional_mode():
+                additional_dir = self.integrated_panel.get_additional_dir()
+                if additional_dir:
+                    saved_path = additional_dir / "additional_results.json"
+                    with open(saved_path, "w", encoding="utf-8") as f:
+                        json.dump(results, f, ensure_ascii=False, indent=2)
+                    self.integrated_panel.progress_panel.set_saved(str(saved_path))
+                    self.statusbar.showMessage(f"追加答案の採点結果を保存: {saved_path}")
+                else:
+                    self.statusbar.showMessage("追加答案フォルダが見つかりません")
+            else:
+                # 通常モード
+                saved_path = Config.save_results(results)
+                self.integrated_panel.progress_panel.set_saved(str(saved_path))
+                self.statusbar.showMessage(f"保存完了: {saved_path}")
         except Exception as e:
             self.statusbar.showMessage(f"保存エラー: {e}")
 
@@ -574,21 +612,20 @@ class MainWindow(QMainWindow):
         # 最初のアイテムの週情報を使用
         first_item = items[0]
 
-        # 現在の週情報を取得
+        # 現在の週情報を取得（検出元週）
         current = Config.get_current_week()
         if not current:
             QMessageBox.warning(self, "追加答案", "週が選択されていません")
             return
 
-        year = current.get("year")
-        target_dir = Config.get_data_dir(
-            year=year,
-            term=first_item.target_term,
-            week=first_item.target_week,
-            class_name=first_item.class_name
-        )
+        # 元の週情報を保存（通常モードに戻る時に復元）
+        self._source_week_info = current.copy()
 
-        additional_dir = target_dir / "additional"
+        year = current.get("year")
+
+        # 追加答案は検出元週（current）のadditionalに保存されている
+        source_dir = Config.get_data_dir()  # 現在週のディレクトリ
+        additional_dir = source_dir / "additional"
 
         if not additional_dir.exists():
             QMessageBox.warning(
@@ -597,7 +634,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # 週を一時的に切り替え
+        # 週をターゲット週に切り替え（採点プロンプト読み込みのため）
         Config.set_current_week(
             year=year,
             term=first_item.target_term,
@@ -619,3 +656,24 @@ class MainWindow(QMainWindow):
 
         # 採点・編集ページに移動
         self.nav_list.setCurrentRow(1)
+
+    def _on_exit_additional_mode(self):
+        """追加答案モード終了時に元の週に戻す"""
+        if hasattr(self, '_source_week_info') and self._source_week_info:
+            week = self._source_week_info.get("week")
+            Config.set_current_week(
+                year=self._source_week_info.get("year"),
+                term=self._source_week_info.get("term"),
+                week=week,
+                class_name=self._source_week_info.get("class_name")
+            )
+            self._source_week_info = None
+
+            # 元の週の採点結果を再読み込み
+            results = Config.load_results()
+            if results:
+                self.integrated_panel.set_results(results)
+                self.integrated_panel.set_pdf(self._current_pdf_path)
+                self.statusbar.showMessage(f"第{week}週に戻りました（{len(results)}件）")
+            else:
+                self.statusbar.showMessage(f"第{week}週に戻りました（採点結果なし）")

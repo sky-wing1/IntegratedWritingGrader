@@ -349,6 +349,9 @@ class PdfLoaderPanel(QWidget):
 
     def _on_finished(self, pdf_path: str):
         """処理完了"""
+        # PDFパスを更新（-converted.pdfを使用）
+        self._current_pdf_path = pdf_path
+
         self.progress_group.setVisible(False)
         self.drop_area.setVisible(True)
         self.info_group.setVisible(True)

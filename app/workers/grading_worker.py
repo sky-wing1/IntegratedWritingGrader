@@ -9,11 +9,24 @@ from pathlib import Path
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from app.utils.config import Config
+import re
+
 from app.utils.criteria_parser import (
     parse_criteria_from_prompt,
     GradingCriteria,
     _default_criteria,
 )
+
+
+def _extract_page_number(filename: str) -> int:
+    """ファイル名からページ番号を抽出
+
+    例: "page_021.png" → 21
+    """
+    match = re.search(r'page_(\d+)', filename)
+    if match:
+        return int(match.group(1))
+    return 0
 
 
 def _find_claude_command() -> str:
@@ -107,9 +120,10 @@ class GradingWorker(QThread):
     finished = pyqtSignal(list)  # all results
     error = pyqtSignal(str)
 
-    def __init__(self, pdf_path: str, parent=None):
+    def __init__(self, pdf_path: str, image_files: list[Path] | None = None, parent=None):
         super().__init__(parent)
         self.pdf_path = pdf_path
+        self._image_files = image_files  # 外部から指定された画像リスト
         self._is_cancelled = False
         self._results: list[dict] = []
         self._criteria: GradingCriteria = _default_criteria()
@@ -134,15 +148,19 @@ class GradingWorker(QThread):
             # 採点基準をパース
             self._criteria = parse_criteria_from_prompt(prompt_file)
 
-            # クロップ済み画像を取得
-            cropped_dir = Config.get_work_dir()
-            if cropped_dir.exists():
-                image_files = sorted(cropped_dir.glob("*.png"))
+            # 画像ファイルを取得（外部指定があればそれを使用）
+            if self._image_files is not None:
+                image_files = self._image_files
             else:
-                image_files = []
+                # 従来の動作: cropped ディレクトリから取得
+                cropped_dir = Config.get_work_dir()
+                if cropped_dir.exists():
+                    image_files = sorted(cropped_dir.glob("*.png"))
+                else:
+                    image_files = []
 
             if not image_files:
-                raise RuntimeError("クロップ済み画像が見つかりません。先にPDF処理を実行してください。")
+                raise RuntimeError("採点対象の画像が見つかりません。")
 
             total = len(image_files)
             self.progress.emit(0, total, f"{total}件の答案を一括採点中...")
@@ -153,9 +171,10 @@ class GradingWorker(QThread):
             # 一括採点
             self._results = self._grade_batch_with_cli(base_prompt, image_files)
 
-            # 結果を通知
-            for i, result in enumerate(self._results):
-                self.result_ready.emit(i + 1, result)
+            # 結果を通知（結果内のページ番号を使用）
+            for result in self._results:
+                page_num = result.get("page", 0)
+                self.result_ready.emit(page_num, result)
 
             self.progress.emit(total, total, "完了")
 
@@ -170,8 +189,11 @@ class GradingWorker(QThread):
         # 動的なJSON形式を生成
         json_schema = self._build_json_schema_for_batch()
 
-        # 画像リストを作成
-        image_list = "\n".join([f"- ページ{i+1}: {img}" for i, img in enumerate(image_files)])
+        # 画像ファイル名から実際のページ番号を抽出
+        page_numbers = [_extract_page_number(img.name) or (i + 1) for i, img in enumerate(image_files)]
+
+        # 画像リストを作成（実際のページ番号を使用）
+        image_list = "\n".join([f"- ページ{page_numbers[i]}: {img}" for i, img in enumerate(image_files)])
 
         # プロンプトに全画像パスを追加
         full_prompt = f"""{prompt}
@@ -213,18 +235,18 @@ class GradingWorker(QThread):
             raw_stderr = result.stderr or ""
 
             if result.returncode == 0:
-                parsed_results = self._parse_batch_result(raw_output, len(image_files))
+                parsed_results = self._parse_batch_result(raw_output, len(image_files), page_numbers)
                 # raw_responseを全結果に追加（デバッグ用）
                 for r in parsed_results:
                     if not r.get("raw_response"):
                         r["raw_response"] = raw_output
                 return parsed_results
             else:
-                # エラー時は全ページ分のエラー結果を返す
+                # エラー時は全ページ分のエラー結果を返す（実際のページ番号を使用）
                 error_msg = f"CLI エラー (code={result.returncode}): {raw_stderr[:500]}"
                 return [
                     {
-                        "page": i + 1,
+                        "page": page_numbers[i],
                         "error": error_msg,
                         "raw_response": raw_output,
                         "total_score": None
@@ -235,7 +257,7 @@ class GradingWorker(QThread):
         except subprocess.TimeoutExpired:
             return [
                 {
-                    "page": i + 1,
+                    "page": page_numbers[i] if i < len(page_numbers) else i + 1,
                     "error": "タイムアウト（10分）",
                     "total_score": None
                 }
@@ -244,7 +266,7 @@ class GradingWorker(QThread):
         except FileNotFoundError:
             return [
                 {
-                    "page": i + 1,
+                    "page": page_numbers[i] if i < len(page_numbers) else i + 1,
                     "error": "claude コマンドが見つかりません。Claude Code CLIをインストールしてください。",
                     "total_score": None
                 }
@@ -434,13 +456,24 @@ class GradingWorker(QThread):
 
         return "\n".join(lines)
 
-    def _parse_batch_result(self, text: str, total_pages: int) -> list[dict]:
-        """一括採点結果をパース"""
+    def _parse_batch_result(self, text: str, total_pages: int, page_numbers: list[int] | None = None) -> list[dict]:
+        """一括採点結果をパース
+
+        Args:
+            text: CLIからの出力テキスト
+            total_pages: 総ページ数
+            page_numbers: 各結果の実際のページ番号リスト（ファイル名から抽出）
+        """
+        # page_numbersが指定されていない場合は連番を使用
+        if page_numbers is None:
+            page_numbers = list(range(1, total_pages + 1))
+
         results = []
 
-        # デフォルト結果を準備
+        # デフォルト結果を準備（実際のページ番号を使用）
         for i in range(total_pages):
-            results.append(self._create_empty_result(i + 1))
+            actual_page = page_numbers[i] if i < len(page_numbers) else i + 1
+            results.append(self._create_empty_result(actual_page))
 
         # 出力が空の場合
         if not text or not text.strip():
@@ -470,10 +503,21 @@ class GradingWorker(QThread):
             data = json.loads(json_text)
 
             if isinstance(data, list):
+                # CLIからの結果をページ番号でマッピング
+                # page_numbersの値とCLIが返すpageの値を照合
+                page_to_index = {pn: i for i, pn in enumerate(page_numbers)}
+
                 for item in data:
-                    page_num = item.get("page", 0)
-                    if 1 <= page_num <= total_pages:
-                        results[page_num - 1] = self._parse_single_item(item, page_num)
+                    cli_page_num = item.get("page", 0)
+                    # CLIが返したページ番号がpage_numbersに含まれているか確認
+                    if cli_page_num in page_to_index:
+                        idx = page_to_index[cli_page_num]
+                        results[idx] = self._parse_single_item(item, cli_page_num)
+                    elif 1 <= cli_page_num <= total_pages:
+                        # フォールバック: 連番として扱う（互換性のため）
+                        idx = cli_page_num - 1
+                        actual_page = page_numbers[idx] if idx < len(page_numbers) else cli_page_num
+                        results[idx] = self._parse_single_item(item, actual_page)
 
         except (json.JSONDecodeError, ValueError) as e:
             # JSONパース失敗時はエラーを記録
