@@ -180,12 +180,16 @@ class IntegratedGradingPanel(QWidget):
         return self._results
 
     def _on_pdf_page_changed(self, page_num: int):
-        """PDFページ変更時（PDFプレビューから）"""
-        # 対応するresultのインデックスを検索
-        for i, result in enumerate(self._results):
-            if result.get("page", i + 1) == page_num:
-                self._select_page(i, sync_pdf=False)
-                return
+        """PDFページ変更時（PDFプレビューから）
+
+        page_num: スピンボックスの値（1始まりの連番）
+        画像モードでは連番がそのままresultsのインデックス+1に対応する
+        """
+        # 連番をインデックスに変換（1始まり → 0始まり）
+        index = page_num - 1
+        if 0 <= index < len(self._results):
+            self._select_page(index, sync_pdf=False)
+            return
 
         # 結果がない場合はフィードバックをクリア
         self.feedback_editor.clear()
@@ -218,9 +222,8 @@ class IntegratedGradingPanel(QWidget):
                 # 追加答案モード: 画像を表示
                 self.pdf_preview.load_image(result["image_path"])
             else:
-                # 通常モード: PDFページを表示
-                page_num = result.get("page", index + 1)
-                self.pdf_preview.set_page(page_num)
+                # 通常モード: 連番でページを指定（画像/PDFのインデックスと一致）
+                self.pdf_preview.set_page(index + 1)
 
         # リスト選択を同期
         self.page_list.blockSignals(True)

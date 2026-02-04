@@ -673,7 +673,12 @@ class MainWindow(QMainWindow):
             results = Config.load_results()
             if results:
                 self.integrated_panel.set_results(results)
-                self.integrated_panel.set_pdf(self._current_pdf_path)
+                # cropped画像を再読み込み
+                try:
+                    cropped_dir = Config.get_cropped_dir()
+                    self.integrated_panel.load_cropped_images(cropped_dir)
+                except RuntimeError:
+                    pass  # croppedフォルダがない場合は何もしない
                 self.statusbar.showMessage(f"第{week}週に戻りました（{len(results)}件）")
             else:
                 self.statusbar.showMessage(f"第{week}週に戻りました（採点結果なし）")
