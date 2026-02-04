@@ -211,7 +211,7 @@ class PipelineWorker(QThread):
                 pix.save(str(temp_path))
                 manager.save_image(temp_path, filename)
 
-                # アイテムを追加
+                # アイテムを追加（元PDFでのページ番号を記録）
                 item = AdditionalAnswerItem(
                     filename=filename,
                     student_name=student_info.name,
@@ -220,6 +220,7 @@ class PipelineWorker(QThread):
                     target_week=student_info.week,
                     target_term=student_info.term,
                     qr_data=f"{student_info.year}_{student_info.term}_{student_info.week}_{student_info.class_name}_{student_info.attendance_no}_{student_info.name}",
+                    original_page=page_num + 1,  # 1-indexed
                 )
                 manager.add_item(item)
                 self._additional_items.append(item)

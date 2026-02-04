@@ -1,6 +1,7 @@
 """PDF出力パネル"""
 
 from __future__ import annotations
+import json
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -224,6 +225,9 @@ class ExportPanel(QWidget):
         if not self._source_pdf or not self._results:
             return
 
+        # 追加答案の採点結果を統合
+        merged_results = self._merge_additional_results(self._results)
+
         # デフォルトファイル名
         default_name = "graded.pdf"
         if self._is_additional_mode:
@@ -244,7 +248,7 @@ class ExportPanel(QWidget):
             return
 
         self.progress_bar.setVisible(True)
-        self.progress_bar.setMaximum(len(self._results))
+        self.progress_bar.setMaximum(len(merged_results))
         self.export_btn.setEnabled(False)
 
         try:
@@ -267,7 +271,7 @@ class ExportPanel(QWidget):
             failed_pages = []
             skipped_pages = []
 
-            for i, result in enumerate(self._results):
+            for i, result in enumerate(merged_results):
                 page_num = result.get("page", i + 1) - 1
                 if page_num < 0 or page_num >= len(doc):
                     skipped_pages.append(page_num + 1)
@@ -647,3 +651,66 @@ class ExportPanel(QWidget):
 
         except Exception as e:
             self.preview_text.setText(f"保存エラー: {e}")
+
+    def _merge_additional_results(self, results: list[dict]) -> list[dict]:
+        """追加答案の採点結果を統合
+
+        通常の採点結果に、追加答案の採点結果を original_page でマージする。
+
+        Args:
+            results: 通常の採点結果
+
+        Returns:
+            統合された採点結果（page番号でソート済み）
+        """
+        # 現在の週のデータディレクトリを取得
+        try:
+            data_dir = Config.get_data_dir()
+        except RuntimeError:
+            return results
+
+        additional_dir = data_dir / "additional"
+        metadata_path = additional_dir / "metadata.json"
+        results_path = additional_dir / "additional_results.json"
+
+        # 追加答案のメタデータと採点結果がなければそのまま返す
+        if not metadata_path.exists() or not results_path.exists():
+            return results
+
+        try:
+            # メタデータを読み込み（original_page を取得）
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+
+            # 追加答案の採点結果を読み込み
+            with open(results_path, "r", encoding="utf-8") as f:
+                additional_results = json.load(f)
+
+            # original_page のマッピングを作成
+            # metadata.items[i].original_page -> additional_results[i]
+            items = metadata.get("items", [])
+
+            # 追加答案の採点結果に original_page を設定
+            for i, item in enumerate(items):
+                original_page = item.get("original_page", 0)
+                if original_page > 0 and i < len(additional_results):
+                    # 採点結果の page を original_page に置き換え
+                    additional_results[i]["page"] = original_page
+
+            # 通常の採点結果をページ番号でマップ化
+            results_by_page = {r.get("page", 0): r for r in results}
+
+            # 追加答案の採点結果を統合（上書き）
+            for add_result in additional_results:
+                page = add_result.get("page", 0)
+                if page > 0:
+                    results_by_page[page] = add_result
+
+            # ページ番号でソートしてリスト化
+            merged = sorted(results_by_page.values(), key=lambda r: r.get("page", 0))
+
+            return merged
+
+        except (json.JSONDecodeError, KeyError, TypeError):
+            # エラー時は元の結果をそのまま返す
+            return results
