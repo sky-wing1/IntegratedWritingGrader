@@ -161,6 +161,7 @@ class MainWindow(QMainWindow):
         self.integrated_panel.progress_panel.json_imported.connect(self._on_json_imported)
         self.integrated_panel.progress_panel.save_requested.connect(self._on_save_requested)
         self.integrated_panel.progress_panel.load_saved_requested.connect(self._on_load_saved_requested)
+        self.integrated_panel.exit_additional_mode_requested.connect(self._on_exit_additional_mode)
         self.content_stack.addWidget(self.integrated_panel)
 
         # 出力ページ
@@ -611,21 +612,20 @@ class MainWindow(QMainWindow):
         # 最初のアイテムの週情報を使用
         first_item = items[0]
 
-        # 現在の週情報を取得
+        # 現在の週情報を取得（検出元週）
         current = Config.get_current_week()
         if not current:
             QMessageBox.warning(self, "追加答案", "週が選択されていません")
             return
 
-        year = current.get("year")
-        target_dir = Config.get_data_dir(
-            year=year,
-            term=first_item.target_term,
-            week=first_item.target_week,
-            class_name=first_item.class_name
-        )
+        # 元の週情報を保存（通常モードに戻る時に復元）
+        self._source_week_info = current.copy()
 
-        additional_dir = target_dir / "additional"
+        year = current.get("year")
+
+        # 追加答案は検出元週（current）のadditionalに保存されている
+        source_dir = Config.get_data_dir()  # 現在週のディレクトリ
+        additional_dir = source_dir / "additional"
 
         if not additional_dir.exists():
             QMessageBox.warning(
@@ -634,7 +634,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # 週を一時的に切り替え
+        # 週をターゲット週に切り替え（採点プロンプト読み込みのため）
         Config.set_current_week(
             year=year,
             term=first_item.target_term,
@@ -656,3 +656,24 @@ class MainWindow(QMainWindow):
 
         # 採点・編集ページに移動
         self.nav_list.setCurrentRow(1)
+
+    def _on_exit_additional_mode(self):
+        """追加答案モード終了時に元の週に戻す"""
+        if hasattr(self, '_source_week_info') and self._source_week_info:
+            week = self._source_week_info.get("week")
+            Config.set_current_week(
+                year=self._source_week_info.get("year"),
+                term=self._source_week_info.get("term"),
+                week=week,
+                class_name=self._source_week_info.get("class_name")
+            )
+            self._source_week_info = None
+
+            # 元の週の採点結果を再読み込み
+            results = Config.load_results()
+            if results:
+                self.integrated_panel.set_results(results)
+                self.integrated_panel.set_pdf(self._current_pdf_path)
+                self.statusbar.showMessage(f"第{week}週に戻りました（{len(results)}件）")
+            else:
+                self.statusbar.showMessage(f"第{week}週に戻りました（採点結果なし）")

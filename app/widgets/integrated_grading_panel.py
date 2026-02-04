@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QLabel, QPushButton
 )
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QShortcut, QKeySequence
 
 from app.widgets.pdf_preview import PDFPreviewWidget
 from app.widgets.feedback_editor import FeedbackEditorWidget
@@ -23,6 +24,7 @@ class IntegratedGradingPanel(QWidget):
     """
 
     result_updated = pyqtSignal(int, dict)  # ページ番号, 更新データ
+    exit_additional_mode_requested = pyqtSignal()  # 追加答案モード終了リクエスト
 
     def __init__(self):
         super().__init__()
@@ -32,6 +34,13 @@ class IntegratedGradingPanel(QWidget):
         self._additional_items: list[AdditionalAnswerItem] = []
         self._additional_dir: Path | None = None
         self._setup_ui()
+        self._setup_shortcuts()
+
+    def _setup_shortcuts(self):
+        """ショートカットキー設定"""
+        # Cmd+S で保存
+        save_shortcut = QShortcut(QKeySequence.StandardKey.Save, self)
+        save_shortcut.activated.connect(self._on_save_shortcut)
 
     def _setup_ui(self):
         """UI構築"""
@@ -330,6 +339,12 @@ class IntegratedGradingPanel(QWidget):
         self._results = []
         self._update_page_list()
         self.feedback_editor.clear()
+        # main_windowに通知して元の週に戻す
+        self.exit_additional_mode_requested.emit()
+
+    def _on_save_shortcut(self):
+        """Cmd+S ショートカットで保存"""
+        self.progress_panel.save_requested.emit()
 
     def is_additional_mode(self) -> bool:
         """追加答案モードかどうか"""

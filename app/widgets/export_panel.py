@@ -443,9 +443,16 @@ class ExportPanel(QWidget):
     def _add_list_breaks(self, text: str) -> str:
         """箇条書き番号の前に改行を追加"""
         import re
+
+        # まず、番号と内容の間の余計な改行を削除（正規化）
+        # 「2.\n論理の補強」→「2. 論理の補強」
+        result = re.sub(r'(\d+\.)\s*\n+\s*', r'\1 ', text)
+        result = re.sub(r'([①②③④⑤⑥⑦⑧⑨⑩])\s*\n+\s*', r'\1', result)
+        result = re.sub(r'(・)\s*\n+\s*', r'\1', result)
+
         # 「1. 」「2. 」「①」「②」などの前に改行を追加
         # ただし文頭の場合は追加しない
-        result = re.sub(r'(?<!^)(\d+\.\s)', r'\n\1', text)
+        result = re.sub(r'(?<!^)(\d+\.\s)', r'\n\1', result)
         result = re.sub(r'(?<!^)([①②③④⑤⑥⑦⑧⑨⑩])', r'\n\1', result)
         result = re.sub(r'(?<!^)(・)', r'\n\1', result)
         return result
@@ -655,7 +662,11 @@ class ExportPanel(QWidget):
     def _merge_additional_results(self, results: list[dict]) -> list[dict]:
         """追加答案の採点結果を統合
 
-        通常の採点結果に、追加答案の採点結果を original_page でマージする。
+        現在週のadditionalフォルダから追加答案の採点結果を読み込み、
+        original_page（元PDFでのページ番号）を使って通常の採点結果とマージする。
+
+        追加答案は検出元週（スキャンした週）のadditionalに保存されるため、
+        この関数は現在週のadditionalを見るだけで全ての追加答案を取得できる。
 
         Args:
             results: 通常の採点結果
