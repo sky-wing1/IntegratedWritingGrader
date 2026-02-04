@@ -1,6 +1,7 @@
 """メインウィンドウ"""
 
 from __future__ import annotations
+import json
 import subprocess
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -342,13 +343,36 @@ class MainWindow(QMainWindow):
     def _on_grading_started(self, method: str):
         """採点開始（パネルから）"""
         if method == "cli":
-            if not self._current_pdf_path:
-                QMessageBox.warning(self, "採点", "まずPDFを読み込んでください")
-                self.integrated_panel.progress_panel.stop_grading()
-                return
+            # 追加答案モードの場合
+            if self.integrated_panel.is_additional_mode():
+                additional_dir = self.integrated_panel.get_additional_dir()
+                if not additional_dir or not additional_dir.exists():
+                    QMessageBox.warning(self, "採点", "追加答案フォルダが見つかりません")
+                    self.integrated_panel.progress_panel.stop_grading()
+                    return
 
-            # 採点ワーカー開始
-            self._grading_worker = GradingWorker(self._current_pdf_path)
+                # 追加答案の画像ファイルを取得
+                image_files = sorted(additional_dir.glob("*.png"))
+                if not image_files:
+                    QMessageBox.warning(self, "採点", "追加答案の画像が見つかりません")
+                    self.integrated_panel.progress_panel.stop_grading()
+                    return
+
+                # 追加答案専用のワーカーを開始
+                self._grading_worker = GradingWorker(
+                    pdf_path="",  # 追加答案モードではPDFパス不要
+                    image_files=image_files
+                )
+            else:
+                # 通常モード
+                if not self._current_pdf_path:
+                    QMessageBox.warning(self, "採点", "まずPDFを読み込んでください")
+                    self.integrated_panel.progress_panel.stop_grading()
+                    return
+
+                self._grading_worker = GradingWorker(self._current_pdf_path)
+
+            # 共通のシグナル接続
             self._grading_worker.progress.connect(self._on_grading_progress)
             self._grading_worker.result_ready.connect(self._on_result_ready)
             self._grading_worker.finished.connect(self._on_grading_finished)
@@ -460,9 +484,22 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            saved_path = Config.save_results(results)
-            self.integrated_panel.progress_panel.set_saved(str(saved_path))
-            self.statusbar.showMessage(f"保存完了: {saved_path}")
+            # 追加答案モードの場合は additional_results.json に保存
+            if self.integrated_panel.is_additional_mode():
+                additional_dir = self.integrated_panel.get_additional_dir()
+                if additional_dir:
+                    saved_path = additional_dir / "additional_results.json"
+                    with open(saved_path, "w", encoding="utf-8") as f:
+                        json.dump(results, f, ensure_ascii=False, indent=2)
+                    self.integrated_panel.progress_panel.set_saved(str(saved_path))
+                    self.statusbar.showMessage(f"追加答案の採点結果を保存: {saved_path}")
+                else:
+                    self.statusbar.showMessage("追加答案フォルダが見つかりません")
+            else:
+                # 通常モード
+                saved_path = Config.save_results(results)
+                self.integrated_panel.progress_panel.set_saved(str(saved_path))
+                self.statusbar.showMessage(f"保存完了: {saved_path}")
         except Exception as e:
             self.statusbar.showMessage(f"保存エラー: {e}")
 

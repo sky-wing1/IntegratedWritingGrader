@@ -107,9 +107,10 @@ class GradingWorker(QThread):
     finished = pyqtSignal(list)  # all results
     error = pyqtSignal(str)
 
-    def __init__(self, pdf_path: str, parent=None):
+    def __init__(self, pdf_path: str, image_files: list[Path] | None = None, parent=None):
         super().__init__(parent)
         self.pdf_path = pdf_path
+        self._image_files = image_files  # 外部から指定された画像リスト
         self._is_cancelled = False
         self._results: list[dict] = []
         self._criteria: GradingCriteria = _default_criteria()
@@ -134,15 +135,19 @@ class GradingWorker(QThread):
             # 採点基準をパース
             self._criteria = parse_criteria_from_prompt(prompt_file)
 
-            # クロップ済み画像を取得
-            cropped_dir = Config.get_work_dir()
-            if cropped_dir.exists():
-                image_files = sorted(cropped_dir.glob("*.png"))
+            # 画像ファイルを取得（外部指定があればそれを使用）
+            if self._image_files is not None:
+                image_files = self._image_files
             else:
-                image_files = []
+                # 従来の動作: cropped ディレクトリから取得
+                cropped_dir = Config.get_work_dir()
+                if cropped_dir.exists():
+                    image_files = sorted(cropped_dir.glob("*.png"))
+                else:
+                    image_files = []
 
             if not image_files:
-                raise RuntimeError("クロップ済み画像が見つかりません。先にPDF処理を実行してください。")
+                raise RuntimeError("採点対象の画像が見つかりません。")
 
             total = len(image_files)
             self.progress.emit(0, total, f"{total}件の答案を一括採点中...")
