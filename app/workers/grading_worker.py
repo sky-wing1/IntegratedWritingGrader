@@ -112,6 +112,48 @@ def _get_claude_env() -> dict:
     return env
 
 
+def _find_gemini_command() -> str | None:
+    """geminiコマンドのパスを検索
+
+    バンドルされたアプリ内ではPATHが制限されているため、
+    一般的なインストール先を順番に探す。
+    見つからない場合はNoneを返す。
+    """
+    # 1. PATHにあればそれを使う
+    gemini_path = shutil.which("gemini")
+    if gemini_path:
+        return gemini_path
+
+    # 2. 一般的なインストール先を探す
+    home = Path.home()
+    common_paths = [
+        home / ".local/bin",
+        Path("/opt/homebrew/bin"),
+        Path("/usr/local/bin"),
+        home / ".npm-global/bin",
+        home / ".yarn/bin",
+    ]
+
+    # nvmの場合は最新バージョンを探す
+    nvm_path = home / ".nvm/versions/node"
+    if nvm_path.exists():
+        versions = sorted(nvm_path.iterdir(), reverse=True)
+        for ver in versions:
+            gemini_bin = ver / "bin/gemini"
+            if gemini_bin.exists():
+                return str(gemini_bin)
+
+    # その他のパスを探す
+    for p in common_paths:
+        if p.is_file() and p.name == "gemini":
+            return str(p)
+        gemini_bin = p / "gemini"
+        if gemini_bin.exists():
+            return str(gemini_bin)
+
+    return None
+
+
 class GradingWorker(QThread):
     """Claude Code CLIで採点を行うワーカー"""
 
@@ -120,10 +162,17 @@ class GradingWorker(QThread):
     finished = pyqtSignal(list)  # all results
     error = pyqtSignal(str)
 
-    def __init__(self, pdf_path: str, image_files: list[Path] | None = None, parent=None):
+    def __init__(
+        self,
+        pdf_path: str,
+        image_files: list[Path] | None = None,
+        ocr_results: list[dict] | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.pdf_path = pdf_path
         self._image_files = image_files  # 外部から指定された画像リスト
+        self._ocr_results = ocr_results  # Gemini OCR結果 [{page, original_text}, ...]
         self._is_cancelled = False
         self._results: list[dict] = []
         self._criteria: GradingCriteria = _default_criteria()
@@ -192,11 +241,52 @@ class GradingWorker(QThread):
         # 画像ファイル名から実際のページ番号を抽出
         page_numbers = [_extract_page_number(img.name) or (i + 1) for i, img in enumerate(image_files)]
 
-        # 画像リストを作成（実際のページ番号を使用）
-        image_list = "\n".join([f"- ページ{page_numbers[i]}: {img}" for i, img in enumerate(image_files)])
+        # OCR結果があればテキストベース、なければ画像ベース
+        has_ocr = self._ocr_results is not None and len(self._ocr_results) > 0
 
-        # プロンプトに全画像パスを追加
-        full_prompt = f"""{prompt}
+        if has_ocr:
+            # テキストベース採点（Gemini OCR結果を使用）
+            ocr_by_page = {r["page"]: r.get("original_text", "") for r in self._ocr_results}
+
+            def _sanitize_ocr_text(text: str) -> str:
+                """OCRテキストからバッククォートフェンスを除去"""
+                return text.replace("```", "'''")
+
+            # OCRエラーのページをフィルタ（正常なテキストのみ採点に渡す）
+            valid_pages = []
+            for i in range(len(image_files)):
+                pn = page_numbers[i]
+                ocr_text = ocr_by_page.get(pn, "")
+                if ocr_text and not ocr_text.startswith("[OCR"):
+                    valid_pages.append((i, pn, ocr_text))
+
+            if not valid_pages:
+                # 全ページOCRエラーの場合は画像ベースにフォールバック
+                has_ocr = False
+
+        if has_ocr:
+            text_list = "\n".join([
+                f"--- ページ{pn} ---\n{_sanitize_ocr_text(ocr_text)}"
+                for _, pn, ocr_text in valid_pages
+            ])
+
+            full_prompt = f"""{prompt}
+
+以下は生徒の答案を文字起こししたテキストです。これらをすべて採点してください。
+
+{text_list}
+
+上記の全{len(valid_pages)}件を採点し、結果をJSON配列で出力してください。
+各要素は以下の形式です:
+{json_schema}
+
+出力はJSON配列のみにしてください。説明文やmarkdownコードブロックは不要です。
+"original_text" には上記の文字起こしテキストをそのまま使用してください。"""
+        else:
+            # 画像ベース採点（従来フロー）
+            image_list = "\n".join([f"- ページ{page_numbers[i]}: {img}" for i, img in enumerate(image_files)])
+
+            full_prompt = f"""{prompt}
 
 以下の画像ファイル群の答案をすべて採点してください。
 
@@ -216,11 +306,11 @@ class GradingWorker(QThread):
             claude_cmd = _find_claude_command()
 
             # Claude Code CLI呼び出し
-            cmd = [
-                claude_cmd,
-                "-p", full_prompt,
-                "--allowedTools", "Read",  # 画像読み込み許可
-            ]
+            cmd = [claude_cmd, "-p", full_prompt]
+
+            # 画像ベースの場合のみReadツールを許可
+            if not has_ocr:
+                cmd.extend(["--allowedTools", "Read"])
 
             result = subprocess.run(
                 cmd,
@@ -233,6 +323,20 @@ class GradingWorker(QThread):
             # デバッグ用: 結果をログに保存
             raw_output = result.stdout or ""
             raw_stderr = result.stderr or ""
+
+            # デバッグログ出力
+            try:
+                debug_dir = Path.home() / ".IntegratedWritingGrader" / "debug"
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                with open(debug_dir / "last_cli_output.txt", "w", encoding="utf-8") as f:
+                    f.write(f"=== returncode: {result.returncode} ===\n")
+                    f.write(f"=== has_ocr: {has_ocr} ===\n")
+                    f.write(f"=== stdout ({len(raw_output)} chars) ===\n")
+                    f.write(raw_output[:5000])
+                    f.write(f"\n=== stderr ({len(raw_stderr)} chars) ===\n")
+                    f.write(raw_stderr[:2000])
+            except Exception:
+                pass
 
             if result.returncode == 0:
                 parsed_results = self._parse_batch_result(raw_output, len(image_files), page_numbers)
@@ -488,6 +592,16 @@ class GradingWorker(QThread):
                 json_start = text.find("```json") + 7
                 json_end = text.find("```", json_start)
                 json_text = text[json_start:json_end].strip()
+            elif "```" in text and "[" in text:
+                # ``` ... ``` (言語指定なし)
+                json_start = text.find("```") + 3
+                json_end = text.find("```", json_start)
+                json_text = text[json_start:json_end].strip()
+            elif "[{" in text:
+                # JSON配列の開始パターン [{ を探す（説明文中の [ と区別）
+                json_start = text.find("[{")
+                json_end = text.rfind("]") + 1
+                json_text = text[json_start:json_end]
             elif "[" in text:
                 # 最初の[から最後の]まで
                 json_start = text.find("[")
@@ -500,7 +614,23 @@ class GradingWorker(QThread):
                     result["raw_response"] = text[:2000]  # 最初の2000文字を保存
                 return results
 
-            data = json.loads(json_text)
+            # JSONパース（失敗時は[{ ... ]の再抽出を試みる）
+            try:
+                data = json.loads(json_text)
+            except json.JSONDecodeError:
+                # フォールバック: テキスト全体から [{ ... ] を再抽出
+                if "[{" in text and "]" in text:
+                    fb_start = text.find("[{")
+                    fb_end = text.rfind("]") + 1
+                    json_text = text[fb_start:fb_end]
+                    data = json.loads(json_text)
+                elif "[" in text and "]" in text:
+                    fb_start = text.find("[")
+                    fb_end = text.rfind("]") + 1
+                    json_text = text[fb_start:fb_end]
+                    data = json.loads(json_text)
+                else:
+                    raise
 
             if isinstance(data, list):
                 # CLIからの結果をページ番号でマッピング

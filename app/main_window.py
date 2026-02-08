@@ -21,7 +21,8 @@ from app.widgets.week_manager_panel import WeekManagerPanel
 from app.widgets.stamp_panel import StampPanel
 from app.widgets.batch_panel import BatchPanel
 from app.workers.pipeline_worker import PipelineWorker
-from app.workers.grading_worker import GradingWorker, load_results_from_json
+from app.workers.grading_worker import GradingWorker, load_results_from_json, _find_gemini_command
+from app.workers.ocr_worker import OcrWorker
 from app.utils.config import Config
 from app.utils.criteria_parser import parse_criteria_from_prompt, GradingCriteria, _default_criteria
 from app.utils.additional_answer_manager import AdditionalAnswerItem
@@ -43,6 +44,8 @@ class MainWindow(QMainWindow):
         # ワーカー
         self._pipeline_worker: PipelineWorker | None = None
         self._grading_worker: GradingWorker | None = None
+        self._ocr_worker: OcrWorker | None = None
+        self._pending_image_files: list | None = None  # OCR後に採点するための画像リスト
         self._current_pdf_path: str | None = None
         self._current_criteria: GradingCriteria = _default_criteria()
         self._detected_info: dict = {}
@@ -344,47 +347,115 @@ class MainWindow(QMainWindow):
     def _on_grading_started(self, method: str):
         """採点開始（パネルから）"""
         if method == "cli":
-            # 追加答案モードの場合
-            if self.integrated_panel.is_additional_mode():
-                additional_dir = self.integrated_panel.get_additional_dir()
-                if not additional_dir or not additional_dir.exists():
-                    QMessageBox.warning(self, "採点", "追加答案フォルダが見つかりません")
-                    self.integrated_panel.progress_panel.stop_grading()
-                    return
+            # 画像ファイルを取得
+            image_files = self._get_grading_image_files()
+            if image_files is None:
+                return  # エラーメッセージ済み
 
-                # 追加答案の画像ファイルを取得
-                image_files = sorted(additional_dir.glob("*.png"))
-                if not image_files:
-                    QMessageBox.warning(self, "採点", "追加答案の画像が見つかりません")
-                    self.integrated_panel.progress_panel.stop_grading()
-                    return
+            # Gemini OCR が利用可能かチェック（画像がある場合のみ）
+            use_gemini_ocr = (
+                len(image_files) > 0
+                and Config.USE_GEMINI_OCR
+                and _find_gemini_command() is not None
+            )
 
-                # 追加答案専用のワーカーを開始
-                self._grading_worker = GradingWorker(
-                    pdf_path="",  # 追加答案モードではPDFパス不要
-                    image_files=image_files
-                )
+            if use_gemini_ocr:
+                # 2段階フロー: Gemini OCR → Claude 採点
+                self._pending_image_files = image_files
+                self._ocr_worker = OcrWorker(image_files)
+                self._ocr_worker.progress.connect(self._on_grading_progress)
+                self._ocr_worker.finished.connect(self._on_ocr_finished)
+                self._ocr_worker.error.connect(self._on_ocr_error)
+                self._ocr_worker.start()
             else:
-                # 通常モード
-                if not self._current_pdf_path:
-                    QMessageBox.warning(self, "採点", "まずPDFを読み込んでください")
-                    self.integrated_panel.progress_panel.stop_grading()
-                    return
+                # 従来フロー: Claude で画像直接採点
+                self._start_grading_worker(
+                    image_files if image_files else None,
+                    ocr_results=None,
+                )
 
-                self._grading_worker = GradingWorker(self._current_pdf_path)
+    def _get_grading_image_files(self):
+        """採点対象の画像ファイルを取得（共通処理）
 
-            # 共通のシグナル接続
-            self._grading_worker.progress.connect(self._on_grading_progress)
-            self._grading_worker.result_ready.connect(self._on_result_ready)
-            self._grading_worker.finished.connect(self._on_grading_finished)
-            self._grading_worker.error.connect(self._on_grading_error)
-            self._grading_worker.start()
+        Returns:
+            list[Path] | None: 画像ファイルリスト。エラー時はNone。
+            通常モードでPDFのみの場合は空リスト（GradingWorkerが自前で取得）。
+        """
+        if self.integrated_panel.is_additional_mode():
+            additional_dir = self.integrated_panel.get_additional_dir()
+            if not additional_dir or not additional_dir.exists():
+                QMessageBox.warning(self, "採点", "追加答案フォルダが見つかりません")
+                self.integrated_panel.progress_panel.stop_grading()
+                return None
+
+            image_files = sorted(additional_dir.glob("*.png"))
+            if not image_files:
+                QMessageBox.warning(self, "採点", "追加答案の画像が見つかりません")
+                self.integrated_panel.progress_panel.stop_grading()
+                return None
+            return image_files
+        else:
+            if not self._current_pdf_path:
+                QMessageBox.warning(self, "採点", "まずPDFを読み込んでください")
+                self.integrated_panel.progress_panel.stop_grading()
+                return None
+
+            # croppedディレクトリから画像を取得
+            try:
+                cropped_dir = Config.get_work_dir()
+                if cropped_dir.exists():
+                    image_files = sorted(cropped_dir.glob("*.png"))
+                    if image_files:
+                        return image_files
+            except RuntimeError:
+                pass
+
+            return []  # 画像なし: GradingWorkerが自前で取得
+
+    def _start_grading_worker(self, image_files, ocr_results=None):
+        """GradingWorker を開始"""
+        if self.integrated_panel.is_additional_mode():
+            self._grading_worker = GradingWorker(
+                pdf_path="",
+                image_files=image_files,
+                ocr_results=ocr_results,
+            )
+        else:
+            self._grading_worker = GradingWorker(
+                self._current_pdf_path,
+                image_files=image_files,
+                ocr_results=ocr_results,
+            )
+
+        self._grading_worker.progress.connect(self._on_grading_progress)
+        self._grading_worker.result_ready.connect(self._on_result_ready)
+        self._grading_worker.finished.connect(self._on_grading_finished)
+        self._grading_worker.error.connect(self._on_grading_error)
+        self._grading_worker.start()
+
+    def _on_ocr_finished(self, ocr_results: list):
+        """Gemini OCR完了 → Claude採点開始"""
+        image_files = self._pending_image_files
+        self._pending_image_files = None
+        if image_files is None:
+            return  # ユーザーがOCR中にキャンセルした場合
+        self._start_grading_worker(image_files, ocr_results=ocr_results)
+
+    def _on_ocr_error(self, error_msg: str):
+        """Gemini OCRエラー → フォールバック（従来フロー）"""
+        self.statusbar.showMessage(f"OCRフォールバック: {error_msg}")
+        image_files = self._pending_image_files
+        self._pending_image_files = None
+        self._start_grading_worker(image_files, ocr_results=None)
 
     def _on_grading_stopped(self):
         """採点停止"""
+        if self._ocr_worker and self._ocr_worker.isRunning():
+            self._ocr_worker.cancel()
         if self._grading_worker and self._grading_worker.isRunning():
             self._grading_worker.cancel()
-            self.statusbar.showMessage("採点を停止しました")
+        self._pending_image_files = None
+        self.statusbar.showMessage("採点を停止しました")
 
     def _on_json_imported(self, json_path: str):
         """JSONインポート"""
@@ -682,3 +753,16 @@ class MainWindow(QMainWindow):
                 self.statusbar.showMessage(f"第{week}週に戻りました（{len(results)}件）")
             else:
                 self.statusbar.showMessage(f"第{week}週に戻りました（採点結果なし）")
+
+    def closeEvent(self, event):
+        """アプリ終了時にワーカーを停止"""
+        if self._ocr_worker and self._ocr_worker.isRunning():
+            self._ocr_worker.cancel()
+            self._ocr_worker.wait(3000)
+        if self._grading_worker and self._grading_worker.isRunning():
+            self._grading_worker.cancel()
+            self._grading_worker.wait(3000)
+        if self._pipeline_worker and self._pipeline_worker.isRunning():
+            self._pipeline_worker.cancel()
+            self._pipeline_worker.wait(3000)
+        super().closeEvent(event)

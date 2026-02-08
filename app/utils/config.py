@@ -45,6 +45,9 @@ class Config:
     # Claude設定
     CLAUDE_MODEL = "claude-sonnet-4-20250514"
 
+    # Gemini OCR設定
+    USE_GEMINI_OCR = True  # Gemini CLIが利用可能な場合にOCRに使用
+
     # 現在の年度・学期・週・クラス（メモリ内）
     _current_year: int | None = None   # 年度（2025など）
     _current_term: str | None = None   # 学期（前期/後期）
