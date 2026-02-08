@@ -239,9 +239,14 @@ class FeedbackEditorWidget(QWidget):
 
             combo.blockSignals(False)
 
-        # 得点
+        # 得点（ドロップダウンの値から再計算して整合性を保証）
+        total_content = 0
+        for combo in self._criterion_combos:
+            opt = combo.currentData()
+            if opt:
+                total_content += opt.score
         self.content_score_spin.blockSignals(True)
-        self.content_score_spin.setValue(result.get("content_score") or 0)
+        self.content_score_spin.setValue(total_content)
         self.content_score_spin.blockSignals(False)
 
         self.expression_deduction_spin.blockSignals(True)
