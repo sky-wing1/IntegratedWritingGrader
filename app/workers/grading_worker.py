@@ -109,6 +109,10 @@ def _get_claude_env() -> dict:
     ]
 
     env["PATH"] = ":".join(extra_paths) + ":" + env.get("PATH", "")
+
+    # ネストセッション検出を回避（アプリからのCLI呼び出しは独立セッション）
+    env.pop("CLAUDECODE", None)
+
     return env
 
 
@@ -212,7 +216,16 @@ class GradingWorker(QThread):
                 raise RuntimeError("採点対象の画像が見つかりません。")
 
             total = len(image_files)
-            self.progress.emit(0, total, f"{total}件の答案を一括採点中...")
+            self.progress.emit(0, total, f"{total}件の答案を採点中...")
+
+            # デバッグログ初期化
+            try:
+                debug_dir = Path.home() / ".IntegratedWritingGrader" / "debug"
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                with open(debug_dir / "last_cli_output.txt", "w", encoding="utf-8") as f:
+                    f.write(f"=== {total} pages, ocr={self._ocr_results is not None} ===\n")
+            except Exception:
+                pass
 
             if self._is_cancelled:
                 return
@@ -233,44 +246,88 @@ class GradingWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
-    def _grade_batch_with_cli(self, prompt: str, image_files: list[Path]) -> list[dict]:
-        """Claude Code CLIで一括採点"""
-        # 動的なJSON形式を生成
-        json_schema = self._build_json_schema_for_batch()
+    # 画像ベース採点の1バッチあたりの最大ページ数
+    BATCH_SIZE = 5
 
-        # 画像ファイル名から実際のページ番号を抽出
+    def _grade_batch_with_cli(self, prompt: str, image_files: list[Path]) -> list[dict]:
+        """Claude Code CLIで一括採点（小バッチに分割）"""
+        json_schema = self._build_json_schema_for_batch()
         page_numbers = [_extract_page_number(img.name) or (i + 1) for i, img in enumerate(image_files)]
 
-        # OCR結果があればテキストベース、なければ画像ベース
         has_ocr = self._ocr_results is not None and len(self._ocr_results) > 0
 
         if has_ocr:
-            # テキストベース採点（Gemini OCR結果を使用）
-            ocr_by_page = {r["page"]: r.get("original_text", "") for r in self._ocr_results}
+            return self._grade_ocr_batch(prompt, image_files, page_numbers, json_schema)
 
-            def _sanitize_ocr_text(text: str) -> str:
-                """OCRテキストからバッククォートフェンスを除去"""
-                return text.replace("```", "'''")
+        # 画像ベース: 小バッチに分割して採点
+        all_results = [self._create_empty_result(pn) for pn in page_numbers]
+        total = len(image_files)
+        claude_cmd = _find_claude_command()
 
-            # OCRエラーのページをフィルタ（正常なテキストのみ採点に渡す）
-            valid_pages = []
-            for i in range(len(image_files)):
-                pn = page_numbers[i]
-                ocr_text = ocr_by_page.get(pn, "")
-                if ocr_text and not ocr_text.startswith("[OCR"):
-                    valid_pages.append((i, pn, ocr_text))
+        for batch_start in range(0, total, self.BATCH_SIZE):
+            if self._is_cancelled:
+                break
 
-            if not valid_pages:
-                # 全ページOCRエラーの場合は画像ベースにフォールバック
-                has_ocr = False
+            batch_end = min(batch_start + self.BATCH_SIZE, total)
+            batch_files = image_files[batch_start:batch_end]
+            batch_pages = page_numbers[batch_start:batch_end]
 
-        if has_ocr:
-            text_list = "\n".join([
-                f"--- ページ{pn} ---\n{_sanitize_ocr_text(ocr_text)}"
-                for _, pn, ocr_text in valid_pages
-            ])
+            self.progress.emit(
+                batch_start, total,
+                f"採点中... ({batch_start + 1}-{batch_end}/{total})"
+            )
 
-            full_prompt = f"""{prompt}
+            batch_results = self._grade_image_batch(
+                claude_cmd, prompt, batch_files, batch_pages, json_schema
+            )
+
+            for i, result in enumerate(batch_results):
+                all_results[batch_start + i] = result
+
+        return all_results
+
+    def _grade_ocr_batch(
+        self, prompt: str, image_files: list[Path],
+        page_numbers: list[int], json_schema: str,
+    ) -> list[dict]:
+        """OCRテキストベースの一括採点"""
+        ocr_by_page = {r["page"]: r.get("original_text", "") for r in self._ocr_results}
+
+        def _sanitize_ocr_text(text: str) -> str:
+            return text.replace("```", "'''")
+
+        valid_pages = []
+        for i in range(len(image_files)):
+            pn = page_numbers[i]
+            ocr_text = ocr_by_page.get(pn, "")
+            if ocr_text and not ocr_text.startswith("[OCR"):
+                valid_pages.append((i, pn, ocr_text))
+
+        if not valid_pages:
+            # 全ページOCRエラー → 画像ベースにフォールバック
+            claude_cmd = _find_claude_command()
+            all_results = [self._create_empty_result(pn) for pn in page_numbers]
+            total = len(image_files)
+            for batch_start in range(0, total, self.BATCH_SIZE):
+                if self._is_cancelled:
+                    break
+                batch_end = min(batch_start + self.BATCH_SIZE, total)
+                batch_results = self._grade_image_batch(
+                    claude_cmd, prompt,
+                    image_files[batch_start:batch_end],
+                    page_numbers[batch_start:batch_end],
+                    json_schema,
+                )
+                for i, result in enumerate(batch_results):
+                    all_results[batch_start + i] = result
+            return all_results
+
+        text_list = "\n".join([
+            f"--- ページ{pn} ---\n{_sanitize_ocr_text(ocr_text)}"
+            for _, pn, ocr_text in valid_pages
+        ])
+
+        full_prompt = f"""{prompt}
 
 以下は生徒の答案を文字起こししたテキストです。これらをすべて採点してください。
 
@@ -282,99 +339,111 @@ class GradingWorker(QThread):
 
 出力はJSON配列のみにしてください。説明文やmarkdownコードブロックは不要です。
 "original_text" には上記の文字起こしテキストをそのまま使用してください。"""
-        else:
-            # 画像ベース採点（従来フロー）
-            image_list = "\n".join([f"- ページ{page_numbers[i]}: {img}" for i, img in enumerate(image_files)])
 
-            full_prompt = f"""{prompt}
+        claude_cmd = _find_claude_command()
+        return self._run_cli_and_parse(
+            claude_cmd, full_prompt, False,
+            len(image_files), page_numbers, json_schema,
+        )
 
-以下の画像ファイル群の答案をすべて採点してください。
+    def _grade_image_batch(
+        self, claude_cmd: str, prompt: str,
+        batch_files: list[Path], batch_pages: list[int],
+        json_schema: str,
+    ) -> list[dict]:
+        """画像ベースの小バッチ採点（5件程度）"""
+        image_list = "\n".join([
+            f"- ページ{batch_pages[i]}: {img}"
+            for i, img in enumerate(batch_files)
+        ])
+
+        full_prompt = f"""あなたは英作文の採点者です。出力はJSON配列のみにしてください。
+説明文、サマリー、表、markdownコードブロックは一切不要です。
+
+{prompt}
+
+以下の{len(batch_files)}件の画像ファイルの答案を採点してください。
 
 {image_list}
 
-必ず以下のJSON配列形式で、全ページ分の結果を出力してください:
-```json
+全{len(batch_files)}件分の結果を以下のJSON配列形式で出力してください:
 [
 {json_schema}
 ]
-```
 
-重要: 必ず全{len(image_files)}件分の結果を配列で返してください。"""
+出力はJSON配列のみです。"""
 
+        return self._run_cli_and_parse(
+            claude_cmd, full_prompt, True,
+            len(batch_files), batch_pages, json_schema,
+        )
+
+    def _run_cli_and_parse(
+        self, claude_cmd: str, full_prompt: str, use_read_tool: bool,
+        total_pages: int, page_numbers: list[int], json_schema: str,
+    ) -> list[dict]:
+        """CLI実行→パース（リトライ付き）"""
         try:
-            # claudeコマンドのパスを取得
-            claude_cmd = _find_claude_command()
-
-            # Claude Code CLI呼び出し
             cmd = [claude_cmd, "-p", full_prompt]
-
-            # 画像ベースの場合のみReadツールを許可
-            if not has_ocr:
+            if use_read_tool:
                 cmd.extend(["--allowedTools", "Read"])
 
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=600,  # 10分タイムアウト
-                env=_get_claude_env()
+                timeout=600,
+                env=_get_claude_env(),
             )
 
-            # デバッグ用: 結果をログに保存
             raw_output = result.stdout or ""
             raw_stderr = result.stderr or ""
 
-            # デバッグログ出力
+            # デバッグログ
             try:
                 debug_dir = Path.home() / ".IntegratedWritingGrader" / "debug"
                 debug_dir.mkdir(parents=True, exist_ok=True)
-                with open(debug_dir / "last_cli_output.txt", "w", encoding="utf-8") as f:
-                    f.write(f"=== returncode: {result.returncode} ===\n")
-                    f.write(f"=== has_ocr: {has_ocr} ===\n")
-                    f.write(f"=== stdout ({len(raw_output)} chars) ===\n")
-                    f.write(raw_output[:5000])
-                    f.write(f"\n=== stderr ({len(raw_stderr)} chars) ===\n")
-                    f.write(raw_stderr[:2000])
+                with open(debug_dir / "last_cli_output.txt", "a", encoding="utf-8") as f:
+                    f.write(f"\n=== batch pages={page_numbers} rc={result.returncode} ===\n")
+                    f.write(raw_output[:3000])
+                    if raw_stderr:
+                        f.write(f"\n--- stderr ---\n{raw_stderr[:1000]}")
             except Exception:
                 pass
 
             if result.returncode == 0:
-                parsed_results = self._parse_batch_result(raw_output, len(image_files), page_numbers)
-                # raw_responseを全結果に追加（デバッグ用）
-                for r in parsed_results:
+                parsed = self._parse_batch_result(raw_output, total_pages, page_numbers)
+                # 全失敗ならリトライ
+                if all(r.get("error") for r in parsed) and raw_output.strip():
+                    retry_out = self._retry_json_conversion(
+                        claude_cmd, raw_output, json_schema, total_pages,
+                    )
+                    if retry_out:
+                        parsed = self._parse_batch_result(retry_out, total_pages, page_numbers)
+                for r in parsed:
                     if not r.get("raw_response"):
                         r["raw_response"] = raw_output
-                return parsed_results
-            else:
-                # エラー時は全ページ分のエラー結果を返す（実際のページ番号を使用）
-                error_msg = f"CLI エラー (code={result.returncode}): {raw_stderr[:500]}"
-                return [
-                    {
-                        "page": page_numbers[i],
-                        "error": error_msg,
-                        "raw_response": raw_output,
-                        "total_score": None
-                    }
-                    for i in range(len(image_files))
-                ]
+                return parsed
+
+            error_msg = f"CLI エラー (code={result.returncode}): {raw_stderr[:500]}"
+            return [
+                {"page": page_numbers[i], "error": error_msg,
+                 "raw_response": raw_output, "total_score": None}
+                for i in range(total_pages)
+            ]
 
         except subprocess.TimeoutExpired:
             return [
-                {
-                    "page": page_numbers[i] if i < len(page_numbers) else i + 1,
-                    "error": "タイムアウト（10分）",
-                    "total_score": None
-                }
-                for i in range(len(image_files))
+                {"page": page_numbers[i] if i < len(page_numbers) else i + 1,
+                 "error": "タイムアウト（10分）", "total_score": None}
+                for i in range(total_pages)
             ]
         except FileNotFoundError:
             return [
-                {
-                    "page": page_numbers[i] if i < len(page_numbers) else i + 1,
-                    "error": "claude コマンドが見つかりません。Claude Code CLIをインストールしてください。",
-                    "total_score": None
-                }
-                for i in range(len(image_files))
+                {"page": page_numbers[i] if i < len(page_numbers) else i + 1,
+                 "error": "claude コマンドが見つかりません。Claude Code CLIをインストールしてください。",
+                 "total_score": None}
+                for i in range(total_pages)
             ]
 
     def _grade_with_cli(self, prompt: str, image_file: Path, page_num: int) -> dict:
@@ -509,6 +578,45 @@ class GradingWorker(QThread):
     def cancel(self):
         """キャンセル"""
         self._is_cancelled = True
+
+    def _retry_json_conversion(
+        self, claude_cmd: str, raw_output: str, json_schema: str, total_pages: int
+    ) -> str | None:
+        """採点結果がJSON形式でなかった場合、JSON変換をリトライ"""
+        retry_prompt = f"""以下は英作文の採点結果ですが、JSON形式ではありません。
+この内容を以下のJSON配列形式に変換してください。
+
+採点結果テキスト:
+{raw_output[:3000]}
+
+JSON配列形式（全{total_pages}件分）:
+[
+{json_schema}
+]
+
+出力はJSON配列のみにしてください。説明文は不要です。
+情報が不足している項目はnullにしてください。"""
+
+        try:
+            result = subprocess.run(
+                [claude_cmd, "-p", retry_prompt],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                env=_get_claude_env()
+            )
+            if result.returncode == 0 and result.stdout:
+                # デバッグログ
+                try:
+                    debug_dir = Path.home() / ".IntegratedWritingGrader" / "debug"
+                    with open(debug_dir / "last_cli_retry.txt", "w", encoding="utf-8") as f:
+                        f.write(result.stdout[:5000])
+                except Exception:
+                    pass
+                return result.stdout
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        return None
 
     def _build_json_schema(self) -> str:
         """動的なJSON形式を構築（単一）"""

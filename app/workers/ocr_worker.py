@@ -200,7 +200,7 @@ Output ONLY a JSON array with this format (no other text):
 [{{"page": <page_number>, "text": "<transcribed text>"}}, ...]"""
 
         try:
-            cmd = [gemini_cmd, "-p", prompt, "--yolo"]
+            cmd = [gemini_cmd, "-m", "gemini-2.5-pro", "-p", prompt, "--yolo"]
             for d in include_dirs:
                 cmd.extend(["--include-directories", d])
 
