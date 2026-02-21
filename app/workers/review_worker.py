@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import subprocess
+import time
 from pathlib import Path
 from typing import List, Optional
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -187,26 +188,63 @@ class ReviewWorker(QThread):
                 "--system-prompt", system_prompt,
             ]
 
-            result = subprocess.run(
+            # Popen で起動し、キャンセル対応 + 進捗表示
+            process = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=300,  # 5分タイムアウト（画像なしなので短縮）
-                env=_get_claude_env()
+                env=_get_claude_env(),
             )
+            self._process = process
+
+            # タイムアウト: 10分（全答案の講評生成は時間がかかる）
+            timeout_sec = 600
+            start_time = time.monotonic()
+            elapsed_msg_interval = 30  # 30秒ごとに進捗通知
+            last_msg_time = start_time
+
+            while process.poll() is None:
+                if self._is_cancelled:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    return
+
+                elapsed = time.monotonic() - start_time
+                if elapsed > timeout_sec:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    self.error.emit("タイムアウト（10分）")
+                    return
+
+                # 定期的に進捗通知
+                now = time.monotonic()
+                if now - last_msg_time >= elapsed_msg_interval:
+                    mins = int(elapsed) // 60
+                    secs = int(elapsed) % 60
+                    self.progress.emit(f"講評を生成中... ({mins}分{secs}秒経過)")
+                    last_msg_time = now
+
+                time.sleep(0.5)
+
+            stdout = process.stdout.read() if process.stdout else ""
+            stderr = process.stderr.read() if process.stderr else ""
 
             if self._is_cancelled:
                 return
 
-            if result.returncode == 0:
-                review_text = result.stdout.strip()
+            if process.returncode == 0:
+                review_text = stdout.strip()
                 plain_text, latex_text = self._split_output(review_text)
                 self.finished.emit(plain_text, latex_text)
             else:
-                self.error.emit(f"CLI エラー: {result.stderr}")
-
-        except subprocess.TimeoutExpired:
-            self.error.emit("タイムアウト（5分）")
+                self.error.emit(f"CLI エラー: {stderr}")
         except FileNotFoundError:
             self.error.emit("claude コマンドが見つかりません")
         except Exception as e:
@@ -282,6 +320,8 @@ class ReviewWorker(QThread):
     def cancel(self):
         """キャンセル"""
         self._is_cancelled = True
+        if hasattr(self, '_process') and self._process and self._process.poll() is None:
+            self._process.terminate()
 
 
 def generate_review_sync(
