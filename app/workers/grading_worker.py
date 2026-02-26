@@ -246,7 +246,7 @@ class GradingWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
-    # 画像ベース採点の1バッチあたりの最大ページ数
+    # 採点の1バッチあたりの最大ページ数
     BATCH_SIZE = 5
 
     def _grade_batch_with_cli(self, prompt: str, image_files: list[Path]) -> list[dict]:
@@ -322,29 +322,53 @@ class GradingWorker(QThread):
                     all_results[batch_start + i] = result
             return all_results
 
-        text_list = "\n".join([
-            f"--- ページ{pn} ---\n{_sanitize_ocr_text(ocr_text)}"
-            for _, pn, ocr_text in valid_pages
-        ])
+        # OCRテキストベースもバッチ分割して採点
+        claude_cmd = _find_claude_command()
+        all_results = [self._create_empty_result(pn) for pn in page_numbers]
+        page_index = {pn: idx for idx, pn in enumerate(page_numbers)}
 
-        full_prompt = f"""{prompt}
+        for batch_start in range(0, len(valid_pages), self.BATCH_SIZE):
+            if self._is_cancelled:
+                break
+
+            batch = valid_pages[batch_start:batch_start + self.BATCH_SIZE]
+
+            self.progress.emit(
+                batch_start, len(valid_pages),
+                f"採点中... ({batch_start + 1}-{min(batch_start + len(batch), len(valid_pages))}/{len(valid_pages)})"
+            )
+
+            text_list = "\n".join([
+                f"--- ページ{pn} ---\n{_sanitize_ocr_text(ocr_text)}"
+                for _, pn, ocr_text in batch
+            ])
+
+            full_prompt = f"""{prompt}
 
 以下は生徒の答案を文字起こししたテキストです。これらをすべて採点してください。
 
 {text_list}
 
-上記の全{len(valid_pages)}件を採点し、結果をJSON配列で出力してください。
+上記の全{len(batch)}件を採点し、結果をJSON配列で出力してください。
 各要素は以下の形式です:
 {json_schema}
 
 出力はJSON配列のみにしてください。説明文やmarkdownコードブロックは不要です。
+結果は必ず1つのJSON配列にまとめてください。分割出力は禁止です。
 "original_text" には上記の文字起こしテキストをそのまま使用してください。"""
 
-        claude_cmd = _find_claude_command()
-        return self._run_cli_and_parse(
-            claude_cmd, full_prompt, False,
-            len(image_files), page_numbers, json_schema,
-        )
+            batch_pages = [pn for _, pn, _ in batch]
+            batch_results = self._run_cli_and_parse(
+                claude_cmd, full_prompt, False,
+                len(batch), batch_pages, json_schema,
+            )
+
+            for result in batch_results:
+                pn = result.get("page", 0)
+                if pn in page_index:
+                    all_results[page_index[pn]] = result
+
+        return all_results
 
     def _grade_image_batch(
         self, claude_cmd: str, prompt: str,
@@ -392,7 +416,7 @@ class GradingWorker(QThread):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=600,
+                timeout=1200,
                 env=_get_claude_env(),
             )
 
@@ -435,7 +459,7 @@ class GradingWorker(QThread):
         except subprocess.TimeoutExpired:
             return [
                 {"page": page_numbers[i] if i < len(page_numbers) else i + 1,
-                 "error": "タイムアウト（10分）", "total_score": None}
+                 "error": "タイムアウト（20分）", "total_score": None}
                 for i in range(total_pages)
             ]
         except FileNotFoundError:
@@ -668,6 +692,72 @@ JSON配列形式（全{total_pages}件分）:
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _extract_all_json_arrays(text: str) -> list[dict]:
+        """出力テキストから全てのJSON配列を抽出してマージする。
+
+        Claudeが出力を分割した場合（複数のJSON配列がmarkdown等で
+        区切られている場合）にも全結果を回収する。
+        """
+        merged: list[dict] = []
+
+        # ```json ... ``` ブロックを全て抽出
+        pos = 0
+        while True:
+            code_start = text.find("```", pos)
+            if code_start == -1:
+                break
+            # ```json or ``` の後
+            content_start = text.find("\n", code_start)
+            if content_start == -1:
+                break
+            content_start += 1
+            code_end = text.find("```", content_start)
+            if code_end == -1:
+                break
+            block = text[content_start:code_end].strip()
+            try:
+                parsed = json.loads(block)
+                if isinstance(parsed, list):
+                    merged.extend(parsed)
+                elif isinstance(parsed, dict):
+                    merged.append(parsed)
+            except (json.JSONDecodeError, ValueError):
+                pass
+            pos = code_end + 3
+
+        if merged:
+            return merged
+
+        # コードブロックがない場合: [ ... ] パターンを全て探す
+        # ブラケットの対応を追跡して正しくJSON配列を抽出
+        i = 0
+        while i < len(text):
+            if text[i] == '[':
+                depth = 0
+                start = i
+                for j in range(i, len(text)):
+                    if text[j] == '[':
+                        depth += 1
+                    elif text[j] == ']':
+                        depth -= 1
+                        if depth == 0:
+                            candidate = text[start:j + 1]
+                            try:
+                                parsed = json.loads(candidate)
+                                if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+                                    merged.extend(parsed)
+                            except (json.JSONDecodeError, ValueError):
+                                pass
+                            i = j + 1
+                            break
+                else:
+                    break
+            else:
+                i += 1
+
+        return merged
+
     def _parse_batch_result(self, text: str, total_pages: int, page_numbers: list[int] | None = None) -> list[dict]:
         """一括採点結果をパース
 
@@ -695,50 +785,15 @@ JSON配列形式（全{total_pages}件分）:
             return results
 
         try:
-            # ```json ... ``` を探す
-            if "```json" in text:
-                json_start = text.find("```json") + 7
-                json_end = text.find("```", json_start)
-                json_text = text[json_start:json_end].strip()
-            elif "```" in text and "[" in text:
-                # ``` ... ``` (言語指定なし)
-                json_start = text.find("```") + 3
-                json_end = text.find("```", json_start)
-                json_text = text[json_start:json_end].strip()
-            elif "[{" in text:
-                # JSON配列の開始パターン [{ を探す（説明文中の [ と区別）
-                json_start = text.find("[{")
-                json_end = text.rfind("]") + 1
-                json_text = text[json_start:json_end]
-            elif "[" in text:
-                # 最初の[から最後の]まで
-                json_start = text.find("[")
-                json_end = text.rfind("]") + 1
-                json_text = text[json_start:json_end]
-            else:
-                # JSONが見つからない場合
+            # 出力中の全JSON配列を抽出してマージ
+            # （Claudeが出力を分割した場合に対応）
+            data = self._extract_all_json_arrays(text)
+
+            if not data:
                 for result in results:
                     result["error"] = "JSON形式の結果が見つかりません"
-                    result["raw_response"] = text[:2000]  # 最初の2000文字を保存
+                    result["raw_response"] = text[:2000]
                 return results
-
-            # JSONパース（失敗時は[{ ... ]の再抽出を試みる）
-            try:
-                data = json.loads(json_text)
-            except json.JSONDecodeError:
-                # フォールバック: テキスト全体から [{ ... ] を再抽出
-                if "[{" in text and "]" in text:
-                    fb_start = text.find("[{")
-                    fb_end = text.rfind("]") + 1
-                    json_text = text[fb_start:fb_end]
-                    data = json.loads(json_text)
-                elif "[" in text and "]" in text:
-                    fb_start = text.find("[")
-                    fb_end = text.rfind("]") + 1
-                    json_text = text[fb_start:fb_end]
-                    data = json.loads(json_text)
-                else:
-                    raise
 
             if isinstance(data, list):
                 # CLIからの結果をページ番号でマッピング
