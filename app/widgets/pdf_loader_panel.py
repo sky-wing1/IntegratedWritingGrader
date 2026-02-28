@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QGroupBox, QPushButton, QFileDialog, QTextEdit,
     QProgressBar, QMessageBox, QFrame, QGridLayout,
-    QListWidget, QListWidgetItem
+    QListWidget, QListWidgetItem, QCheckBox
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
@@ -136,6 +136,25 @@ class PdfLoaderPanel(QWidget):
         self.drop_area = DropArea()
         self.drop_area.file_dropped.connect(self._on_file_selected)
         layout.addWidget(self.drop_area)
+
+        # 追加答案モードチェックボックス
+        self.additional_mode_cb = QCheckBox("追加答案として読み込む")
+        self.additional_mode_cb.setToolTip(
+            "既に採点済みの週に、追加提出の答案を読み込む場合にチェックしてください。\n"
+            "既存の採点結果を上書きせず、追加答案として処理します。"
+        )
+        self.additional_mode_cb.setStyleSheet("""
+            QCheckBox {
+                font-size: 13px;
+                color: #37352f;
+                padding: 4px 0;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+            }
+        """)
+        layout.addWidget(self.additional_mode_cb)
 
         # 検出情報表示
         self.info_group = QGroupBox("検出情報")
@@ -300,6 +319,7 @@ class PdfLoaderPanel(QWidget):
 
         # UI更新
         self.drop_area.setVisible(False)
+        self.additional_mode_cb.setVisible(False)
         self.info_group.setVisible(False)
         self.prompt_group.setVisible(False)
         self.start_btn.setVisible(False)
@@ -311,8 +331,12 @@ class PdfLoaderPanel(QWidget):
         # 追加答案リストをクリア
         self._additional_items = []
 
-        # ワーカー開始
-        self._pipeline_worker = PipelineWorker(self._current_pdf_path)
+        # ワーカー開始（追加答案モードフラグを渡す）
+        is_additional = self.additional_mode_cb.isChecked()
+        self._pipeline_worker = PipelineWorker(
+            self._current_pdf_path,
+            additional_mode=is_additional
+        )
         self._pipeline_worker.progress.connect(self._on_progress)
         self._pipeline_worker.students_found.connect(self._on_students_found)
         self._pipeline_worker.additional_answers_found.connect(self._on_additional_found)
@@ -354,6 +378,7 @@ class PdfLoaderPanel(QWidget):
 
         self.progress_group.setVisible(False)
         self.drop_area.setVisible(True)
+        self.additional_mode_cb.setVisible(True)
         self.info_group.setVisible(True)
 
         # 検出情報を表示
@@ -382,7 +407,23 @@ class PdfLoaderPanel(QWidget):
             self._load_prompt()
 
             self.prompt_group.setVisible(True)
-            self.start_btn.setVisible(True)
+
+            # 追加答案モードの場合
+            if self.additional_mode_cb.isChecked() and self._additional_items:
+                self.start_btn.setVisible(False)
+                self._update_additional_list()
+                self._select_all_additional()
+                self.additional_mode_cb.setChecked(False)
+
+                QMessageBox.information(
+                    self,
+                    "追加答案として読み込み完了",
+                    f"{len(self._additional_items)} 件の答案を追加答案として読み込みました。\n"
+                    "「選択した答案を採点」ボタンで採点を開始できます。"
+                )
+                return  # 通常モードの通知をスキップ
+            else:
+                self.start_btn.setVisible(True)
         else:
             # QRコードが検出できなかった場合
             for key in ["year", "term", "week", "class", "pages"]:
@@ -394,7 +435,7 @@ class PdfLoaderPanel(QWidget):
                 "手動で設定するか、PDFを確認してください。"
             )
 
-        # 追加答案の通知
+        # 通常モード時の追加答案通知（異なる週検出）
         if self._additional_items:
             count = len(self._additional_items)
             QMessageBox.information(
@@ -408,6 +449,7 @@ class PdfLoaderPanel(QWidget):
         """エラー"""
         self.progress_group.setVisible(False)
         self.drop_area.setVisible(True)
+        self.additional_mode_cb.setVisible(True)
         self.status_label.setText(f"エラー: {error}")
         QMessageBox.critical(self, "処理エラー", error)
 
@@ -444,6 +486,8 @@ class PdfLoaderPanel(QWidget):
         self._additional_items = []
 
         self.drop_area.setVisible(True)
+        self.additional_mode_cb.setVisible(True)
+        self.additional_mode_cb.setChecked(False)
         self.info_group.setVisible(False)
         self.prompt_group.setVisible(False)
         self.progress_group.setVisible(False)

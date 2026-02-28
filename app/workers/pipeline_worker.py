@@ -22,9 +22,10 @@ class PipelineWorker(QThread):
     additional_answers_found = pyqtSignal(int)  # 追加答案件数
     error = pyqtSignal(str)
 
-    def __init__(self, input_pdf: str, parent=None):
+    def __init__(self, input_pdf: str, additional_mode: bool = False, parent=None):
         super().__init__(parent)
         self.input_pdf = input_pdf
+        self.additional_mode = additional_mode
         self._is_cancelled = False
         self._students: List[StudentInfo] = []
         self._additional_items: List[AdditionalAnswerItem] = []
@@ -175,7 +176,10 @@ class PipelineWorker(QThread):
 
             # 追加答案かどうかチェック
             is_additional = False
-            if student_info and current_week and current_term:
+            if self.additional_mode and student_info:
+                # 追加答案モード: 全ページを追加答案として扱う
+                is_additional = True
+            elif student_info and current_week and current_term:
                 if student_info.week != current_week or student_info.term != current_term:
                     is_additional = True
 
@@ -189,32 +193,44 @@ class PipelineWorker(QThread):
             filename = f"page_{page_num + 1:03d}.png"
 
             if is_additional and student_info:
-                # 追加答案として保存（検出元週のadditionalフォルダに保存）
-                # キーは検出元週（current）で統一
-                source_key = (current_term, current_week)
+                # 追加答案として保存
+                if self.additional_mode:
+                    # 追加答案モード: QRコードの週がターゲット週（同週追加提出）
+                    manager_key = (student_info.year, student_info.term, student_info.week, student_info.class_name)
+                    save_term = student_info.term
+                    save_week = student_info.week
+                else:
+                    # 通常モード（異なる週検出）: 検出元週に保存
+                    manager_key = (current_term, current_week)
+                    save_term = current_term
+                    save_week = current_week
 
-                if source_key not in additional_managers:
-                    # 検出元週（現在処理中の週）のディレクトリを取得/作成
-                    source_dir = Config.get_data_dir(
+                if manager_key not in additional_managers:
+                    save_dir = Config.get_data_dir(
                         year=student_info.year,
-                        term=current_term,
-                        week=current_week,
+                        term=save_term,
+                        week=save_week,
                         class_name=student_info.class_name
                     )
-                    manager = AdditionalAnswerManager(source_dir)
-                    manager.detected_from_week = current_week
-                    additional_managers[source_key] = manager
+                    manager = AdditionalAnswerManager(save_dir)
+                    manager.detected_from_week = save_week
+                    additional_managers[manager_key] = manager
 
-                manager = additional_managers[source_key]
+                manager = additional_managers[manager_key]
+
+                # ユニークなファイル名を生成（既存ファイルとの衝突回避）
+                actual_filename = self._unique_additional_filename(
+                    manager.get_additional_dir(), page_num + 1
+                )
 
                 # 一時ファイルに保存してからコピー
                 temp_path = self._temp_dir / filename
                 pix.save(str(temp_path))
-                manager.save_image(temp_path, filename)
+                manager.save_image(temp_path, actual_filename)
 
                 # アイテムを追加（元PDFでのページ番号を記録）
                 item = AdditionalAnswerItem(
-                    filename=filename,
+                    filename=actual_filename,
                     student_name=student_info.name,
                     attendance_no=student_info.attendance_no,
                     class_name=student_info.class_name,
@@ -298,6 +314,20 @@ class PipelineWorker(QThread):
     def additional_items(self) -> List[AdditionalAnswerItem]:
         """検出された追加答案を取得"""
         return self._additional_items
+
+    def _unique_additional_filename(self, additional_dir: Path, page_num: int) -> str:
+        """追加答案ディレクトリ内でユニークなファイル名を生成"""
+        additional_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"page_{page_num:03d}.png"
+        if not (additional_dir / filename).exists():
+            return filename
+        # 衝突する場合はサフィックスを追加
+        counter = 1
+        while True:
+            filename = f"page_{page_num:03d}_{counter}.png"
+            if not (additional_dir / filename).exists():
+                return filename
+            counter += 1
 
     def cancel(self):
         """キャンセル"""

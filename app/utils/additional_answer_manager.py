@@ -86,17 +86,37 @@ class AdditionalAnswerManager:
         return dest_path
 
     def save_metadata(self) -> Path:
-        """メタデータを保存"""
+        """メタデータを保存（既存がある場合は追記）"""
         additional_dir = self.get_additional_dir()
         additional_dir.mkdir(parents=True, exist_ok=True)
+
+        metadata_path = additional_dir / "metadata.json"
+
+        # 既存メタデータがあれば読み込んで追記
+        existing_items = []
+        if metadata_path.exists():
+            try:
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                existing_items = existing.get("items", [])
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        # 既存アイテムのファイル名セットを作成（重複排除）
+        existing_filenames = {item.get("filename") for item in existing_items}
+        new_items = [
+            item.to_dict() for item in self.items
+            if item.filename not in existing_filenames
+        ]
+
+        all_items = existing_items + new_items
 
         metadata = {
             "detected_from_week": self.detected_from_week,
             "detected_at": (self.detected_at or datetime.now()).isoformat(),
-            "items": [item.to_dict() for item in self.items],
+            "items": all_items,
         }
 
-        metadata_path = additional_dir / "metadata.json"
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
 
