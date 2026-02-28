@@ -15,6 +15,7 @@ from PyQt6.QtGui import QAction
 from app.widgets.pdf_loader_panel import PdfLoaderPanel
 from app.widgets.integrated_grading_panel import IntegratedGradingPanel
 from app.widgets.export_panel import ExportPanel
+from app.widgets.additional_answer_panel import AdditionalAnswerPanel
 from app.widgets.roster_panel import RosterPanel
 from app.widgets.worksheet_panel import WorksheetPanel
 from app.widgets.week_manager_panel import WeekManagerPanel
@@ -25,7 +26,6 @@ from app.workers.grading_worker import GradingWorker, load_results_from_json, _f
 from app.workers.ocr_worker import OcrWorker
 from app.utils.config import Config
 from app.utils.criteria_parser import parse_criteria_from_prompt, GradingCriteria, _default_criteria
-from app.utils.additional_answer_manager import AdditionalAnswerItem
 from app import __version__
 
 
@@ -120,14 +120,15 @@ class MainWindow(QMainWindow):
         self.nav_list.setIconSize(QSize(20, 20))
 
         nav_items = [
-            ("PDF読み込み", "QRコードから自動判定"),
-            ("採点・編集", "AI採点の実行と編集"),
-            ("出力", "PDF出力"),
-            ("一括処理", "複数PDFをまとめて処理"),
-            ("名簿管理", "クラス名簿の管理"),
-            ("添削用紙", "添削用紙の生成"),
-            ("週管理", "週の追加と編集"),
-            ("スタンプ", "評価スタンプの管理"),
+            ("PDF読み込み", "QRコードから自動判定"),       # 0
+            ("採点・編集", "AI採点の実行と編集"),          # 1
+            ("出力", "PDF出力"),                          # 2
+            ("追加答案", "追加答案の採点・出力"),           # 3
+            ("一括処理", "複数PDFをまとめて処理"),         # 4
+            ("名簿管理", "クラス名簿の管理"),              # 5
+            ("添削用紙", "添削用紙の生成"),                # 6
+            ("週管理", "週の追加と編集"),                  # 7
+            ("スタンプ", "評価スタンプの管理"),            # 8
         ]
 
         for name, tooltip in nav_items:
@@ -150,13 +151,13 @@ class MainWindow(QMainWindow):
 
     def _add_pages(self):
         """ページ追加"""
-        # PDF読み込みページ（QRコードから自動判定）
+        # 0: PDF読み込みページ（QRコードから自動判定）
         self.pdf_loader = PdfLoaderPanel()
         self.pdf_loader.pdf_loaded.connect(self._on_pdf_loaded_with_info)
         self.pdf_loader.additional_grading_requested.connect(self._on_additional_grading_requested)
         self.content_stack.addWidget(self.pdf_loader)
 
-        # 採点・編集ページ（統合パネル）
+        # 1: 採点・編集ページ（統合パネル）
         self.integrated_panel = IntegratedGradingPanel()
         self.integrated_panel.result_updated.connect(self._on_result_updated)
         self.integrated_panel.progress_panel.grading_started.connect(self._on_grading_started)
@@ -164,34 +165,38 @@ class MainWindow(QMainWindow):
         self.integrated_panel.progress_panel.json_imported.connect(self._on_json_imported)
         self.integrated_panel.progress_panel.save_requested.connect(self._on_save_requested)
         self.integrated_panel.progress_panel.load_saved_requested.connect(self._on_load_saved_requested)
-        self.integrated_panel.exit_additional_mode_requested.connect(self._on_exit_additional_mode)
         self.content_stack.addWidget(self.integrated_panel)
 
-        # 出力ページ
+        # 2: 出力ページ
         self.export_panel = ExportPanel()
         self.export_panel.export_complete.connect(self._on_export_complete)
         self.content_stack.addWidget(self.export_panel)
 
-        # 一括処理ページ
+        # 3: 追加答案ページ（採点・出力統合）
+        self.additional_panel = AdditionalAnswerPanel()
+        self.additional_panel.status_message.connect(self.statusbar.showMessage)
+        self.content_stack.addWidget(self.additional_panel)
+
+        # 4: 一括処理ページ
         self.batch_panel = BatchPanel()
         self.batch_panel.batch_finished.connect(self._on_batch_finished)
         self.content_stack.addWidget(self.batch_panel)
 
-        # 名簿管理ページ
+        # 5: 名簿管理ページ
         self.roster_panel = RosterPanel()
         self.roster_panel.roster_loaded.connect(self._on_roster_loaded)
         self.content_stack.addWidget(self.roster_panel)
 
-        # 添削用紙生成ページ
+        # 6: 添削用紙生成ページ
         self.worksheet_panel = WorksheetPanel()
         self.content_stack.addWidget(self.worksheet_panel)
 
-        # 週管理ページ
+        # 7: 週管理ページ
         self.week_manager_panel = WeekManagerPanel()
         self.week_manager_panel.week_updated.connect(self._on_week_updated)
         self.content_stack.addWidget(self.week_manager_panel)
 
-        # スタンプ管理ページ
+        # 8: スタンプ管理ページ
         self.stamp_panel = StampPanel()
         self.content_stack.addWidget(self.stamp_panel)
 
@@ -333,7 +338,7 @@ class MainWindow(QMainWindow):
         if self._current_pdf_path:
             self.export_panel.set_data(self._current_pdf_path, results)
 
-        self.nav_list.setCurrentRow(2)  # 出力タブ（index 2）
+        self.nav_list.setCurrentRow(2)
 
     def _on_run_grading(self):
         """AI採点実行（メニューから）"""
@@ -347,12 +352,10 @@ class MainWindow(QMainWindow):
     def _on_grading_started(self, method: str):
         """採点開始（パネルから）"""
         if method == "cli":
-            # 画像ファイルを取得
             image_files = self._get_grading_image_files()
             if image_files is None:
-                return  # エラーメッセージ済み
+                return
 
-            # Gemini OCR が利用可能かチェック（画像がある場合のみ）
             use_gemini_ocr = (
                 len(image_files) > 0
                 and Config.USE_GEMINI_OCR
@@ -360,7 +363,6 @@ class MainWindow(QMainWindow):
             )
 
             if use_gemini_ocr:
-                # 2段階フロー: Gemini OCR → Claude 採点
                 self._pending_image_files = image_files
                 self._ocr_worker = OcrWorker(image_files)
                 self._ocr_worker.progress.connect(self._on_grading_progress)
@@ -368,65 +370,42 @@ class MainWindow(QMainWindow):
                 self._ocr_worker.error.connect(self._on_ocr_error)
                 self._ocr_worker.start()
             else:
-                # 従来フロー: Claude で画像直接採点
                 self._start_grading_worker(
                     image_files if image_files else None,
                     ocr_results=None,
                 )
 
     def _get_grading_image_files(self):
-        """採点対象の画像ファイルを取得（共通処理）
+        """採点対象の画像ファイルを取得
 
         Returns:
             list[Path] | None: 画像ファイルリスト。エラー時はNone。
-            通常モードでPDFのみの場合は空リスト（GradingWorkerが自前で取得）。
+            PDFのみの場合は空リスト（GradingWorkerが自前で取得）。
         """
-        if self.integrated_panel.is_additional_mode():
-            additional_dir = self.integrated_panel.get_additional_dir()
-            if not additional_dir or not additional_dir.exists():
-                QMessageBox.warning(self, "採点", "追加答案フォルダが見つかりません")
-                self.integrated_panel.progress_panel.stop_grading()
-                return None
+        if not self._current_pdf_path:
+            QMessageBox.warning(self, "採点", "まずPDFを読み込んでください")
+            self.integrated_panel.progress_panel.stop_grading()
+            return None
 
-            image_files = sorted(additional_dir.glob("*.png"))
-            if not image_files:
-                QMessageBox.warning(self, "採点", "追加答案の画像が見つかりません")
-                self.integrated_panel.progress_panel.stop_grading()
-                return None
-            return image_files
-        else:
-            if not self._current_pdf_path:
-                QMessageBox.warning(self, "採点", "まずPDFを読み込んでください")
-                self.integrated_panel.progress_panel.stop_grading()
-                return None
+        # croppedディレクトリから画像を取得
+        try:
+            cropped_dir = Config.get_work_dir()
+            if cropped_dir.exists():
+                image_files = sorted(cropped_dir.glob("*.png"))
+                if image_files:
+                    return image_files
+        except RuntimeError:
+            pass
 
-            # croppedディレクトリから画像を取得
-            try:
-                cropped_dir = Config.get_work_dir()
-                if cropped_dir.exists():
-                    image_files = sorted(cropped_dir.glob("*.png"))
-                    if image_files:
-                        return image_files
-            except RuntimeError:
-                pass
-
-            return []  # 画像なし: GradingWorkerが自前で取得
+        return []  # 画像なし: GradingWorkerが自前で取得
 
     def _start_grading_worker(self, image_files, ocr_results=None):
         """GradingWorker を開始"""
-        if self.integrated_panel.is_additional_mode():
-            self._grading_worker = GradingWorker(
-                pdf_path="",
-                image_files=image_files,
-                ocr_results=ocr_results,
-            )
-        else:
-            self._grading_worker = GradingWorker(
-                self._current_pdf_path,
-                image_files=image_files,
-                ocr_results=ocr_results,
-            )
-
+        self._grading_worker = GradingWorker(
+            self._current_pdf_path,
+            image_files=image_files,
+            ocr_results=ocr_results,
+        )
         self._grading_worker.progress.connect(self._on_grading_progress)
         self._grading_worker.result_ready.connect(self._on_result_ready)
         self._grading_worker.finished.connect(self._on_grading_finished)
@@ -438,7 +417,7 @@ class MainWindow(QMainWindow):
         image_files = self._pending_image_files
         self._pending_image_files = None
         if image_files is None:
-            return  # ユーザーがOCR中にキャンセルした場合
+            return
         self._start_grading_worker(image_files, ocr_results=ocr_results)
 
     def _on_ocr_error(self, error_msg: str):
@@ -484,34 +463,25 @@ class MainWindow(QMainWindow):
 
     def _on_grading_finished(self, results: list):
         """採点完了"""
-        # エラー結果をチェック
         error_results = [r for r in results if r.get("error")]
         total_count = len(results)
         error_count = len(error_results)
 
         if error_count == total_count and total_count > 0:
-            # すべてエラーの場合
             first_error = error_results[0].get("error", "不明なエラー")
             self.integrated_panel.progress_panel.set_error(first_error)
             self.statusbar.showMessage(f"採点失敗: {first_error}")
             QMessageBox.critical(self, "採点エラー", f"採点に失敗しました:\n{first_error}")
             return
 
-        # 結果をセット（部分的成功でも表示）
+        # 結果をセット
         self.integrated_panel.set_results(results)
 
         # 出力パネルにもデータをセット
-        if self.integrated_panel.is_additional_mode():
-            source_pdf = getattr(self, '_additional_source_pdf', None) or self._current_pdf_path
-            if source_pdf:
-                self.export_panel.set_data(source_pdf, results)
-                self.export_panel.set_additional_mode(True)
-        elif self._current_pdf_path:
+        if self._current_pdf_path:
             self.export_panel.set_data(self._current_pdf_path, results)
-            self.export_panel.set_additional_mode(False)
 
         if error_count > 0:
-            # 一部エラーの場合は警告付きで完了
             self.integrated_panel.progress_panel.set_complete()
             self.statusbar.showMessage(f"採点完了（{error_count}件エラー）: {total_count} ページ")
             QMessageBox.warning(
@@ -520,10 +490,8 @@ class MainWindow(QMainWindow):
                 "詳細は各ページの結果を確認してください。"
             )
         else:
-            # すべて成功
             self.integrated_panel.progress_panel.set_complete()
             self.statusbar.showMessage(f"採点完了: {total_count} ページ")
-        # 既に統合パネルにいるのでページ遷移は不要
 
     def _on_grading_error(self, error: str):
         """採点エラー"""
@@ -533,7 +501,6 @@ class MainWindow(QMainWindow):
 
     def _on_result_updated(self, page_num: int, data: dict):
         """採点結果更新（フィードバック編集後）"""
-        # 出力パネルのデータも更新
         results = self.integrated_panel.get_results()
         if self._current_pdf_path and results:
             self.export_panel.set_data(self._current_pdf_path, results)
@@ -543,11 +510,10 @@ class MainWindow(QMainWindow):
         self.statusbar.showMessage(f"PDF出力完了: {file_path}")
         QMessageBox.information(self, "出力完了", f"PDFを出力しました:\n{file_path}")
 
-        # Finderで保存フォルダを開く（ファイルを選択状態で）
         try:
             subprocess.run(["open", "-R", file_path], check=False)
         except Exception:
-            pass  # 開けなくても無視
+            pass
 
     def _on_save_requested(self):
         """採点結果の保存リクエスト"""
@@ -562,22 +528,9 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            # 追加答案モードの場合は additional_results.json に保存
-            if self.integrated_panel.is_additional_mode():
-                additional_dir = self.integrated_panel.get_additional_dir()
-                if additional_dir:
-                    saved_path = additional_dir / "additional_results.json"
-                    with open(saved_path, "w", encoding="utf-8") as f:
-                        json.dump(results, f, ensure_ascii=False, indent=2)
-                    self.integrated_panel.progress_panel.set_saved(str(saved_path))
-                    self.statusbar.showMessage(f"追加答案の採点結果を保存: {saved_path}")
-                else:
-                    self.statusbar.showMessage("追加答案フォルダが見つかりません")
-            else:
-                # 通常モード
-                saved_path = Config.save_results(results)
-                self.integrated_panel.progress_panel.set_saved(str(saved_path))
-                self.statusbar.showMessage(f"保存完了: {saved_path}")
+            saved_path = Config.save_results(results)
+            self.integrated_panel.progress_panel.set_saved(str(saved_path))
+            self.statusbar.showMessage(f"保存完了: {saved_path}")
         except Exception as e:
             self.statusbar.showMessage(f"保存エラー: {e}")
 
@@ -588,7 +541,6 @@ class MainWindow(QMainWindow):
             self.statusbar.showMessage("保存済みの採点結果がありません")
             return
 
-        # 選択ダイアログを表示
         dialog = QDialog(self)
         dialog.setWindowTitle("保存済み結果を読み込み")
         dialog.setMinimumWidth(400)
@@ -652,13 +604,9 @@ class MainWindow(QMainWindow):
         week = saved.get("week")
         class_name = saved.get("class_name")
 
-        # 現在の週を設定
         Config.set_current_week(year, term, week, class_name)
-
-        # 採点基準を読み込み
         self._load_criteria()
 
-        # 採点結果を読み込み
         results = Config.load_results(year, term, week, class_name)
         if results:
             self.integrated_panel.set_results(results)
@@ -666,7 +614,6 @@ class MainWindow(QMainWindow):
             self.integrated_panel.progress_panel.set_complete()
             self.integrated_panel.progress_panel.save_btn.setEnabled(True)
 
-            # 出力パネルにもデータをセット
             if self._current_pdf_path:
                 self.export_panel.set_data(self._current_pdf_path, results)
 
@@ -682,29 +629,19 @@ class MainWindow(QMainWindow):
             self.statusbar.showMessage("採点結果の読み込みに失敗しました")
 
     def _on_additional_grading_requested(self, items: list):
-        """追加答案の採点リクエスト"""
+        """追加答案の採点リクエスト → 追加答案タブに遷移"""
         if not items:
             return
 
-        # 最初のアイテムの週情報を使用
         first_item = items[0]
 
-        # 現在の週情報を取得（検出元週）
         current = Config.get_current_week()
         if not current:
             QMessageBox.warning(self, "追加答案", "週が選択されていません")
             return
 
-        # 元の週情報を保存（通常モードに戻る時に復元）
-        self._source_week_info = current.copy()
-
-        # 追加答案のソースPDFを保存（PDF出力用）
-        self._additional_source_pdf = self.pdf_loader._current_pdf_path
-
-        year = current.get("year")
-
         # 追加答案は検出元週（current）のadditionalに保存されている
-        source_dir = Config.get_data_dir()  # 現在週のディレクトリ
+        source_dir = Config.get_data_dir()
         additional_dir = source_dir / "additional"
 
         if not additional_dir.exists():
@@ -714,56 +651,25 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # 週をターゲット週に切り替え（採点プロンプト読み込みのため）
-        Config.set_current_week(
-            year=year,
-            term=first_item.target_term,
-            week=first_item.target_week,
-            class_name=first_item.class_name
+        # ターゲット週の採点基準を読み込み
+        target_week_path = Config.get_week_path(first_item.target_term, first_item.target_week)
+        prompt_file = target_week_path / "prompt.txt"
+        if prompt_file.exists():
+            criteria = parse_criteria_from_prompt(prompt_file)
+        else:
+            criteria = _default_criteria()
+
+        # ソースPDFパスを取得
+        source_pdf = self.pdf_loader._current_pdf_path
+
+        # 追加答案パネルにデータを渡して遷移
+        self.additional_panel.load_additional_answers(
+            additional_dir, items, criteria, source_pdf,
+            prompt_file=prompt_file if prompt_file.exists() else None,
         )
 
-        # 採点基準を読み込み
-        self._load_criteria()
-
-        # 追加答案モードで採点・編集パネルに遷移
-        self.integrated_panel.set_criteria(self._current_criteria)
-        self.integrated_panel.load_additional_answers(additional_dir, items)
-
-        # ステータスバー更新
-        self.statusbar.showMessage(
-            f"追加答案モード: 第{first_item.target_week}週 ({len(items)}件)"
-        )
-
-        # 採点・編集ページに移動
-        self.nav_list.setCurrentRow(1)
-
-    def _on_exit_additional_mode(self):
-        """追加答案モード終了時に元の週に戻す"""
-        if hasattr(self, '_source_week_info') and self._source_week_info:
-            week = self._source_week_info.get("week")
-            Config.set_current_week(
-                year=self._source_week_info.get("year"),
-                term=self._source_week_info.get("term"),
-                week=week,
-                class_name=self._source_week_info.get("class_name")
-            )
-            self._source_week_info = None
-            self._additional_source_pdf = None
-            self.export_panel.set_additional_mode(False)
-
-            # 元の週の採点結果を再読み込み
-            results = Config.load_results()
-            if results:
-                self.integrated_panel.set_results(results)
-                # cropped画像を再読み込み
-                try:
-                    cropped_dir = Config.get_cropped_dir()
-                    self.integrated_panel.load_cropped_images(cropped_dir)
-                except RuntimeError:
-                    pass  # croppedフォルダがない場合は何もしない
-                self.statusbar.showMessage(f"第{week}週に戻りました（{len(results)}件）")
-            else:
-                self.statusbar.showMessage(f"第{week}週に戻りました（採点結果なし）")
+        # 追加答案タブに移動（index 3）
+        self.nav_list.setCurrentRow(3)
 
     def closeEvent(self, event):
         """アプリ終了時にワーカーを停止"""
@@ -776,4 +682,5 @@ class MainWindow(QMainWindow):
         if self._pipeline_worker and self._pipeline_worker.isRunning():
             self._pipeline_worker.cancel()
             self._pipeline_worker.wait(3000)
+        self.additional_panel.stop_workers()
         super().closeEvent(event)

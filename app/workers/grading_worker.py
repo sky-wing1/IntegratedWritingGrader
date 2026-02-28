@@ -171,12 +171,14 @@ class GradingWorker(QThread):
         pdf_path: str,
         image_files: list[Path] | None = None,
         ocr_results: list[dict] | None = None,
+        prompt_file: Path | None = None,
         parent=None,
     ):
         super().__init__(parent)
         self.pdf_path = pdf_path
         self._image_files = image_files  # 外部から指定された画像リスト
         self._ocr_results = ocr_results  # Gemini OCR結果 [{page, original_text}, ...]
+        self._prompt_file = prompt_file  # 外部から指定されたプロンプトファイル
         self._is_cancelled = False
         self._results: list[dict] = []
         self._criteria: GradingCriteria = _default_criteria()
@@ -185,12 +187,14 @@ class GradingWorker(QThread):
         """採点実行（一括処理）"""
         try:
             # プロンプト読み込み
-            current = Config.get_current_week()
-            if not current:
-                raise RuntimeError("週が選択されていません")
-
-            week_path = Config.get_week_path(current["term"], current["week"])
-            prompt_file = week_path / "prompt.txt"
+            if self._prompt_file:
+                prompt_file = self._prompt_file
+            else:
+                current = Config.get_current_week()
+                if not current:
+                    raise RuntimeError("週が選択されていません")
+                week_path = Config.get_week_path(current["term"], current["week"])
+                prompt_file = week_path / "prompt.txt"
 
             if not prompt_file.exists():
                 raise RuntimeError(f"プロンプトファイルが見つかりません: {prompt_file}")
