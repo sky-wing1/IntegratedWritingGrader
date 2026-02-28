@@ -225,8 +225,11 @@ class ExportPanel(QWidget):
         if not self._source_pdf or not self._results:
             return
 
-        # 追加答案の採点結果を統合
-        merged_results = self._merge_additional_results(self._results)
+        # 追加答案モード時はマージ不要（追加分のみ出力）
+        if self._is_additional_mode:
+            merged_results = self._results
+        else:
+            merged_results = self._merge_additional_results(self._results)
 
         # デフォルトファイル名
         default_name = "graded.pdf"

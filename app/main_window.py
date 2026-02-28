@@ -501,8 +501,14 @@ class MainWindow(QMainWindow):
         self.integrated_panel.set_results(results)
 
         # 出力パネルにもデータをセット
-        if self._current_pdf_path:
+        if self.integrated_panel.is_additional_mode():
+            source_pdf = getattr(self, '_additional_source_pdf', None) or self._current_pdf_path
+            if source_pdf:
+                self.export_panel.set_data(source_pdf, results)
+                self.export_panel.set_additional_mode(True)
+        elif self._current_pdf_path:
             self.export_panel.set_data(self._current_pdf_path, results)
+            self.export_panel.set_additional_mode(False)
 
         if error_count > 0:
             # 一部エラーの場合は警告付きで完了
@@ -692,6 +698,9 @@ class MainWindow(QMainWindow):
         # 元の週情報を保存（通常モードに戻る時に復元）
         self._source_week_info = current.copy()
 
+        # 追加答案のソースPDFを保存（PDF出力用）
+        self._additional_source_pdf = self.pdf_loader._current_pdf_path
+
         year = current.get("year")
 
         # 追加答案は検出元週（current）のadditionalに保存されている
@@ -739,6 +748,8 @@ class MainWindow(QMainWindow):
                 class_name=self._source_week_info.get("class_name")
             )
             self._source_week_info = None
+            self._additional_source_pdf = None
+            self.export_panel.set_additional_mode(False)
 
             # 元の週の採点結果を再読み込み
             results = Config.load_results()
