@@ -50,9 +50,9 @@ class MainWindow(QMainWindow):
         self._current_criteria: GradingCriteria = _default_criteria()
         self._detected_info: dict = {}
 
+        self._setup_statusbar()
         self._setup_ui()
         self._setup_menu()
-        self._setup_statusbar()
 
     def _setup_ui(self):
         """UIセットアップ"""
